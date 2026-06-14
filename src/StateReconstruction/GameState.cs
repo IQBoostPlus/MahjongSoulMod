@@ -27,8 +27,7 @@ public class GameState
     public int RemainingTiles { get; private set; }
 
     // ── 已知牌信息 ──
-    private int[] _tileCount;       // 34种牌已见枚数
-    private int[] _tileTotal;       // 34种牌总量（含宝牌标记导致的调整）
+    private int[] _tileCount = new int[Tile.TileTypeCount];
 
     public int[] TileCount => _tileCount;
 
@@ -120,12 +119,12 @@ public class GameState
     }
 
     /// <summary>
-    /// 验证状态是否合法
+    /// 验证状态是否合法（宽松版 — 空手牌也允许以支持场景发现阶段）
     /// </summary>
     public bool Validate()
     {
-        // 手牌数验证
-        if (Hand.Length is < 1 or > 14) return false;
+        // 手牌数验证 (0 手牌 = 还没读取到数据，不算非法)
+        if (Hand.Length > 14) return false;
 
         // 枚数验证
         for (int i = 0; i < Tile.TileTypeCount; i++)

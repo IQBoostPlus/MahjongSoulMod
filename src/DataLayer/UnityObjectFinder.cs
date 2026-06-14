@@ -8,76 +8,77 @@ namespace MahjongSoulMod.DataLayer;
 
 /// <summary>
 /// Layer 1A: Unity 对象查找器
-/// 游戏架构: ToLua + CUI 框架
 ///
-/// 注意: IL2CPP 下 Resources.FindObjectsOfTypeAll(System.Type) 签名不匹配，
-/// 必须使用反射调用或 GameObject.Find(string) 替代。
+/// 通过 GameObject.Find() 按名称定位场景对象。
+/// 名称来自 Patches.cs 的首次运行场景 dump。
+///
+/// IL2CPP 兼容性说明:
+/// - Resources.FindObjectsOfTypeAll(System.Type) → ❌ 签名不匹配
+/// - GameObject.FindObjectsOfType<T>() → ⚠️ 可能不匹配
+/// - GameObject.Find(string) → ✅ 正常工作
+/// - Transform 父子遍历 → ✅ 正常工作
+/// - GetComponent<T>() → ⚠️ 使用反射调用
 /// </summary>
 public class UnityObjectFinder
 {
-    private object _cachedLuaClient;
+    private static object? _cachedEngine;
+    private static bool _engineTried;
 
-    /// <summary>
-    /// 查找 LuaClient 单例
-    /// </summary>
-    public bool TryFindGameEngine(out object engineObj)
+    public bool TryFindGameEngine(out object? engineObj)
     {
-        engineObj = _cachedLuaClient;
-        if (engineObj != null) return true;
+        engineObj = _cachedEngine;
+        if (_engineTried) return engineObj != null;
+
+        _engineTried = true;
 
         try
         {
-            var lcType = FindType("LuaClient");
-            if (lcType == null) return false;
-
-            var instProp = lcType.GetProperty("Instance",
-                BindingFlags.Public | BindingFlags.Static);
-            if (instProp != null)
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                engineObj = instProp.GetValue(null);
-                _cachedLuaClient = engineObj;
-                return engineObj != null;
-            }
+                if (!asm.GetName().Name.Contains("Assembly-CSharp"))
+                    continue;
 
-            return false;
+                var type = asm.GetType("GameEngine", false);
+                if (type == null) continue;
+
+                var field = type.GetField("Inst",
+                    BindingFlags.Public | BindingFlags.Static);
+                if (field != null)
+                {
+                    engineObj = field.GetValue(null);
+                    _cachedEngine = engineObj;
+                    if (engineObj != null)
+                        Utils.LogWriter.Info("[UOF] Found GameEngine.Inst");
+                    return engineObj != null;
+                }
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            return false;
+            Utils.LogWriter.Warning($"[UOF] FindGameEngine: {ex.Message}");
         }
+
+        return false;
     }
 
-    /// <summary>
-    /// 从场景中读取手牌
-    /// </summary>
-    public TileData[] ReadHandTiles(object _)
+    public TileData[] ReadHandTiles(object? _)
     {
         var result = new List<TileData>();
 
         try
         {
-            // 通过 GameObject.Find 按名字查找手牌对象
-            var handRoot = GameObject.Find("HandRoot") ??
-                           GameObject.Find("HandPanel") ??
-                           GameObject.Find("Tehai");
-            if (handRoot != null)
-                CollectTilesFromChildren(handRoot.transform, result);
+            // 尝试已知的手牌面板名称
+            var handPanel = GameObject.Find("HandPanel")
+                ?? GameObject.Find("hand_panel")
+                ?? GameObject.Find("SelfHand")
+                ?? GameObject.Find("Tehai")
+                ?? GameObject.Find("HandRoot");
 
-            // 如果没找到，尝试通过命名约定扫描
-            if (result.Count == 0)
+            if (handPanel != null)
             {
-                for (int i = 0; i < 14; i++)
-                {
-                    var pai = GameObject.Find($"Pai_{i}") ??
-                              GameObject.Find($"Tile_{i}") ??
-                              GameObject.Find($"handPai_{i}");
-                    if (pai != null)
-                    {
-                        var tile = ParseTileFromName(pai.name);
-                        if (tile.HasValue)
-                            result.Add(tile.Value);
-                    }
-                }
+                CollectTilesFromChildren(handPanel.transform, result);
+                if (result.Count > 0)
+                    Utils.LogWriter.Info($"[UOF] Read {result.Count} hand tiles from {handPanel.name}");
             }
         }
         catch (Exception ex)
@@ -88,140 +89,70 @@ public class UnityObjectFinder
         return result.ToArray();
     }
 
-    public TileData[][] ReadAllDiscards(object _)
+    public TileData[][] ReadAllDiscards(object? _)
     {
-        var discards = new[] { new List<TileData>(), new List<TileData>(),
-                               new List<TileData>(), new List<TileData>() };
+        var d = new[] {
+            new List<TileData>(), new List<TileData>(),
+            new List<TileData>(), new List<TileData>()
+        };
 
         try
         {
             for (int p = 0; p < 4; p++)
             {
-                var area = GameObject.Find($"DiscardArea_{p}")
-                    ?? GameObject.Find($"Kawa_{p}")
-                    ?? GameObject.Find($"Sutehai_{p}");
+                var area = GameObject.Find($"Kawa_{p}")
+                    ?? GameObject.Find($"kawa_{p}")
+                    ?? GameObject.Find($"Discard_{p}")
+                    ?? GameObject.Find($"discard_{p}");
                 if (area != null)
-                    CollectTilesFromChildren(area.transform, discards[p]);
+                    CollectTilesFromChildren(area.transform, d[p]);
             }
         }
         catch { }
 
-        return new[] {
-            discards[0].ToArray(), discards[1].ToArray(),
-            discards[2].ToArray(), discards[3].ToArray()
-        };
+        return new[] { d[0].ToArray(), d[1].ToArray(), d[2].ToArray(), d[3].ToArray() };
     }
 
-    public MeldData[][] ReadAllMelds(object _)
-    {
-        var all = new[] { new List<MeldData>(), new List<MeldData>(),
-                          new List<MeldData>(), new List<MeldData>() };
-        return new[] { all[0].ToArray(), all[1].ToArray(), all[2].ToArray(), all[3].ToArray() };
-    }
+    public MeldData[][] ReadAllMelds(object? _) =>
+        new[] { Array.Empty<MeldData>(), Array.Empty<MeldData>(), Array.Empty<MeldData>(), Array.Empty<MeldData>() };
 
-    public TileData[] ReadDoraIndicators(object _)
+    public TileData[] ReadDoraIndicators(object? _)
     {
-        var result = new List<TileData>();
+        var r = new List<TileData>();
         try
         {
-            var doraRoot = GameObject.Find("DoraIndicator")
-                ?? GameObject.Find("DoraPanel");
-            if (doraRoot != null)
-                CollectTilesFromChildren(doraRoot.transform, result);
+            var root = GameObject.Find("Dora") ?? GameObject.Find("DoraPanel");
+            if (root != null) CollectTilesFromChildren(root.transform, r);
         }
         catch { }
-        return result.ToArray();
+        return r.ToArray();
     }
 
-    public bool TryAnalyzeScene(out int roundWind, out int selfSeat,
-        out int[] scores)
-    {
-        roundWind = 0;
-        selfSeat = 0;
-        scores = new[] { 25000, 25000, 25000, 25000 };
+    // 这些值后续通过 Lua 状态读取
+    public int ReadRoundWind(object? _) => 0;
+    public int ReadSelfSeat(object? _) => 0;
+    public int ReadHonba(object? _) => 0;
+    public int[] ReadDeposits(object? _) => [];
+    public int[] ReadScores(object? _) => [25000, 25000, 25000, 25000];
+    public TileData ReadUraDoraIndicator(object? _) => default;
+    public int ReadCurrentTurn(object? _) => 0;
+    public int ReadRemainingTiles(object? _) => 0;
+    public int ReadLastAction(object? _) => 0;
+    public TileData ReadLastActionTile(object? _) => default;
+    public bool TryAnalyzeScene(out int rw, out int ss, out int[] sc)
+    { rw = 0; ss = 0; sc = [25000, 25000, 25000, 25000]; return false; }
 
-        try
-        {
-            if (TryFindGameEngine(out var engine))
-            {
-                roundWind = ReadRoundWind(engine);
-                selfSeat = ReadSelfSeat(engine);
-                scores = ReadScores(engine);
-            }
+    // ── 辅助 ──
 
-            for (int i = 0; i < 4; i++)
-            {
-                var scoreText = GameObject.Find($"ScoreText_{i}")
-                    ?? GameObject.Find($"Player{i}_Score");
-                if (scoreText != null)
-                {
-                    var textComp = scoreText.GetComponent<UnityEngine.UI.Text>();
-                    if (textComp != null)
-                    {
-                        var text = textComp.text;
-                        if (int.TryParse(text, out int val))
-                            scores[i] = val * 100;
-                    }
-                }
-            }
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    public int ReadRoundWind(object _) => 0;
-    public int ReadSelfSeat(object _) => 0;
-    public int ReadHonba(object _) => 0;
-    public int[] ReadDeposits(object _) => [];
-    public int[] ReadScores(object _) => [25000, 25000, 25000, 25000];
-    public TileData ReadUraDoraIndicator(object _) => default;
-    public int ReadCurrentTurn(object _) => 0;
-    public int ReadRemainingTiles(object _) => 0;
-    public int ReadLastAction(object _) => 0;
-    public TileData ReadLastActionTile(object _) => default;
-
-    // ── 辅助方法 ──
-
-    private static Type FindType(string name)
-    {
-        try
-        {
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                var t = asm.GetType(name, false);
-                if (t != null) return t;
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    private static GameObject GetGameObject(object component)
-    {
-        try
-        {
-            var prop = component.GetType().GetProperty("gameObject");
-            return prop?.GetValue(component) as GameObject;
-        }
-        catch { return null; }
-    }
-
-    private static void CollectTilesFromChildren(Transform parent,
-        List<TileData> result)
+    private static void CollectTilesFromChildren(Transform parent, List<TileData> result)
     {
         if (parent == null) return;
         for (int i = 0; i < parent.childCount; i++)
         {
             var child = parent.GetChild(i);
             if (child == null) continue;
-            var go = child.gameObject;
-            if (go == null) continue;
-            var tile = ParseTileFromName(go.name);
-            if (tile.HasValue)
-                result.Add(tile.Value);
+            var tile = ParseTileFromName(child.name);
+            if (tile.HasValue) result.Add(tile.Value);
             CollectTilesFromChildren(child, result);
         }
     }
@@ -229,28 +160,16 @@ public class UnityObjectFinder
     internal static TileData? ParseTileFromName(string name)
     {
         if (string.IsNullOrEmpty(name)) return null;
-        var cleaned = name.ToLowerInvariant();
-        var m = Regex.Match(cleaned,
+        var m = Regex.Match(name.ToLowerInvariant(),
             @"(?:tile_|pai_|img_)?(\d{1,2})([mpsz])(r?)");
         if (!m.Success) return null;
 
         int num = int.Parse(m.Groups[1].Value);
-        string suitChar = m.Groups[2].Value;
-        bool isRed = m.Groups[3].Value == "r";
-        int suit = suitChar switch { "m" => 0, "p" => 1, "s" => 2, "z" => 3, _ => -1 };
-        if (suit < 0 || num < 1 || num > 9) return null;
-        if (suit == 3 && num > 7) return null;
+        string s = m.Groups[2].Value;
+        bool red = m.Groups[3].Value == "r";
+        int suit = s switch { "m" => 0, "p" => 1, "s" => 2, "z" => 3, _ => -1 };
+        if (suit < 0 || num < 1 || num > 9 || (suit == 3 && num > 7)) return null;
 
-        return new TileData { Suit = suit, Value = num, IsRedFive = isRed, IsDora = false };
-    }
-}
-
-/// <summary>
-/// 场景诊断工具 — 运行时使用反射输出场景层次
-/// </summary>
-internal class SceneDumper
-{
-    public void DumpHierarchy()
-    {
+        return new TileData { Suit = suit, Value = num, IsRedFive = red, IsDora = false };
     }
 }

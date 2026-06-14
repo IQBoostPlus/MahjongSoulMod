@@ -68,8 +68,8 @@ public class StrategyController
 
     private static bool IsAllLast(GameState state)
     {
-        // 东4局(Honba不计)且点数<0或最后一位
-        return state.RoundWind == 0 && state.Honba >= 0; // 简化
+        // 南4局 (South round, 4th honba) 或东4局东场最后一局无连庄时
+        return state.RoundWind == 1; // 南场 = RoundWind == 1
     }
 
     private static double Normalize(int configValue) => (configValue - 1) / 4.0;

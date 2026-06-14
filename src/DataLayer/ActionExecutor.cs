@@ -1,110 +1,151 @@
 using System;
-using System.Collections.Generic;
+using System.Reflection;
 using MahjongSoulMod.StateReconstruction;
+using UnityEngine;
 
 namespace MahjongSoulMod.DataLayer;
 
 /// <summary>
 /// Layer 1B: 动作执行器
-/// 将 AI 决策转换为游戏内的实际动作
 /// </summary>
 public class ActionExecutor
 {
-    private InputSimulator _inputSim = new();
-    private HarmonyInvoker _harmonyInvoker = new();
-
-    /// <summary>
-    /// 执行动作，优先使用 Harmony hook 内部调用，降级到输入模拟
-    /// </summary>
     public bool Execute(GameActionDecision decision)
-    {
-        if (!TryInvokeInternal(decision))
-        {
-            return SimulateClick(decision);
-        }
-        return true;
-    }
-
-    private bool TryInvokeInternal(GameActionDecision decision)
     {
         try
         {
-            switch (decision.Action)
+            // 优先: 尝试反射调用游戏内部方法
+            if (TryReflectInvoke(decision))
+                return true;
+
+            // 降级: 模拟点击
+            if (SimulateClick(decision))
+                return true;
+
+            // 兜底: 只记录
+            Utils.LogWriter.Info($"[Action] Cannot execute {decision.Action} " +
+                $"(tile={decision.Tile}, target={decision.CallTarget})");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Utils.LogWriter.Warning($"[Action] Failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 通过反射查找并调用游戏内部动作方法
+    /// </summary>
+    private bool TryReflectInvoke(GameActionDecision decision)
+    {
+        try
+        {
+            // 查找 GameEngine.Inst 上的方法
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                case GameActionType.Discard:
-                    // TODO: Harmony hook 调用内部 Discard(Tile) 方法
-                    return _harmonyInvoker.Discard(decision.Tile);
-                case GameActionType.Pon:
-                    return _harmonyInvoker.CallPon();
-                case GameActionType.Chi:
-                    return _harmonyInvoker.CallChi();
-                case GameActionType.Kan:
-                    return _harmonyInvoker.CallKan();
-                case GameActionType.Riichi:
-                    return _harmonyInvoker.DeclareRiichi(decision.Tile);
-                case GameActionType.Ron:
-                    return _harmonyInvoker.CallRon();
-                case GameActionType.Tsumo:
-                    return _harmonyInvoker.CallTsumo();
-                case GameActionType.Pass:
-                    return _harmonyInvoker.CallPass();
-                default:
-                    return false;
+                if (!asm.GetName().Name.Contains("Assembly-CSharp"))
+                    continue;
+
+                var engineType = asm.GetType("GameEngine", false);
+                if (engineType == null) continue;
+
+                var instField = engineType.GetField("Inst",
+                    BindingFlags.Public | BindingFlags.Static);
+                var inst = instField?.GetValue(null);
+                if (inst == null) continue;
+
+                // 尝试调用带 action 名称的方法
+                string methodName = decision.Action switch
+                {
+                    GameActionType.Discard => "OnDiscard",
+                    GameActionType.Pon => "OnPon",
+                    GameActionType.Chi => "OnChi",
+                    GameActionType.Kan => "OnKan",
+                    GameActionType.Riichi => "OnRiichi",
+                    GameActionType.Pass => "OnPass",
+                    _ => null
+                };
+
+                if (methodName == null) return false;
+
+                var method = engineType.GetMethod(methodName,
+                    BindingFlags.Public | BindingFlags.NonPublic |
+                    BindingFlags.Instance | BindingFlags.Static);
+                if (method != null)
+                {
+                    method.Invoke(inst, null);
+                    Utils.LogWriter.Info($"[Action] Invoked {methodName}()");
+                    return true;
+                }
+
+                break;
             }
+        }
+        catch { }
+        return false;
+    }
+
+    /// <summary>
+    /// 通过 Unity UI 事件系统模拟点击
+    /// </summary>
+    private bool SimulateClick(GameActionDecision decision)
+    {
+        try
+        {
+            string buttonName = decision.Action switch
+            {
+                GameActionType.Discard => "BtnDiscard",
+                GameActionType.Pon => "BtnPon",
+                GameActionType.Chi => "BtnChi",
+                GameActionType.Kan => "BtnKan",
+                GameActionType.Riichi => "BtnRiichi",
+                GameActionType.Pass => "BtnPass",
+                _ => null
+            };
+
+            if (buttonName == null) return false;
+
+            var btn = GameObject.Find(buttonName);
+            if (btn == null)
+            {
+                // 尝试备选命名
+                foreach (var suffix in new[] { "Button", "", "_btn" })
+                {
+                    btn = GameObject.Find(buttonName + suffix)
+                        ?? GameObject.Find(decision.Action.ToString() + suffix);
+                    if (btn != null) break;
+                }
+            }
+
+            if (btn != null)
+            {
+                var btnComponent = btn.GetComponent<UnityEngine.UI.Button>();
+                if (btnComponent != null)
+                {
+                    btnComponent.onClick.Invoke();
+                    Utils.LogWriter.Info($"[Action] Clicked {btn.name}");
+                    return true;
+                }
+            }
+
+            return false;
         }
         catch
         {
-            return false; // 降级到输入模拟
+            return false;
         }
-    }
-
-    private bool SimulateClick(GameActionDecision decision)
-    {
-        return _inputSim.ClickAction(decision);
     }
 }
 
-/// <summary>
-/// AI 决策的输出 —— 要执行的动作
-/// </summary>
 public struct GameActionDecision
 {
     public GameActionType Action;
-    public Tile Tile;       // 关联的牌（如切哪张、立直切哪张）
-    public int CallTarget;  // 鸣牌目标 (0-3)
+    public Tile Tile;
+    public int CallTarget;
 }
 
 public enum GameActionType
 {
-    Discard,        // 打牌
-    Riichi,         // 立直
-    Pon,            // 碰
-    Chi,            // 吃
-    Kan,            // 杠
-    Ron,            // 荣和
-    Tsumo,          // 自摸
-    Pass,           // 跳过
-}
-
-/// <summary>
-/// Harmony 方式调用游戏内部方法
-/// </summary>
-internal class HarmonyInvoker
-{
-    public bool Discard(Tile tile) => false;    // TODO
-    public bool CallPon() => false;
-    public bool CallChi() => false;
-    public bool CallKan() => false;
-    public bool DeclareRiichi(Tile tile) => false;
-    public bool CallRon() => false;
-    public bool CallTsumo() => false;
-    public bool CallPass() => false;
-}
-
-/// <summary>
-/// Windows 输入模拟（降级方案）
-/// </summary>
-internal class InputSimulator
-{
-    public bool ClickAction(GameActionDecision decision) => false; // TODO
+    Discard, Riichi, Pon, Chi, Kan, Ron, Tsumo, Pass
 }

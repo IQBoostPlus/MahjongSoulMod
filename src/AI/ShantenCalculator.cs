@@ -197,19 +197,27 @@ public class ShantenCalculator
     /// <summary>
     /// 计算听牌后能和的牌列表
     /// </summary>
-    public static Tile[] GetWaitingTiles(int[] counts)
+    public static int[] GetWaitingTiles(int[] counts)
     {
-        var waits = new List<Tile>();
+        var waits = new List<int>();
 
         for (int i = 0; i < Tile.TileTypeCount; i++)
         {
             if (counts[i] >= Tile.MaxCountPerTile) continue;
 
             counts[i]++;
-            if (Calculate(new[] { new Tile(0) }) == -1) // 简化: 需完整判断
+
+            // 计算14枚手牌的向听数 (当前counts总和应为14)
+            int total = 0;
+            for (int j = 0; j < Tile.TileTypeCount; j++) total += counts[j];
+
+            if (NormalShanten(counts, total) == -1 ||
+                ChiitoiShanten(counts) == -1 ||
+                KokushiShanten(counts) == -1)
             {
-                // 实际上需要完整构建14枚手牌判断，此处为伪代码
+                waits.Add(i);
             }
+
             counts[i]--;
         }
 

@@ -48,14 +48,16 @@ public class MainPlugin : BepInEx.Unity.IL2CPP.BasePlugin
     }
 
     /// <summary>
-    /// 每帧由 Patches.OnLuaLooperUpdate → OnFrameUpdate 调用
+    /// 每帧由 Patches.OnUpdate → OnFrameUpdate 调用
     /// </summary>
     public static void OnFrameUpdate()
     {
         var sc = SafetyController;
-        if (sc == null || !sc.IsEnabled) return;
+        if (sc == null) return;
 
-        if (!sc.ShouldAct()) return;
+        sc.Update();
+
+        if (!sc.IsEnabled || !sc.ShouldAct()) return;
 
         MainLoop.Instance.Tick();
     }
