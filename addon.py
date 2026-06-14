@@ -1,11 +1,11 @@
 """
-雀魂 MITM 代理插件 - 独立文件 (mitmdump -s addon.py)
+雀魂 MITM 代理插件 - mitmdump -s addon.py
 
 工作原理:
   1. mitmproxy 拦截雀魂的 WebSocket 流量
   2. 解码 liqi protobuf 消息 → 重建牌局状态
-  3. AI 引擎决策 → 写入动作到 action_queue.json
-  4. 主程序读取动作队列并执行鼠标点击
+  3. AI 引擎决策 → 写入动作队列
+  4. 启动器读取队列并模拟鼠标点击
 """
 
 import json, os, struct, time
@@ -13,9 +13,22 @@ from pathlib import Path
 
 
 # ── 配置 ──
-ACTION_QUEUE = os.path.join(str(Path.home()), ".majsoul_automod", "action_queue.json")
-EVENT_LOG = os.path.join(str(Path.home()), ".majsoul_automod", "events.log")
-os.makedirs(os.path.dirname(ACTION_QUEUE), exist_ok=True)
+HOME = str(Path.home())
+BASE = os.path.join(HOME, ".majsoul_automod")
+ACTION_QUEUE = os.path.join(BASE, "action_queue.json")
+EVENT_LOG = os.path.join(BASE, "events.log")
+LOG_FILE = os.path.join(BASE, "logs", "addon.log")
+os.makedirs(os.path.join(BASE, "logs"), exist_ok=True)
+
+
+def log_info(msg):
+    """安全日志(兼容有无 mitmproxy ctx)"""
+    try: from mitmproxy import ctx; ctx.log.info(msg)
+    except: pass
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except: pass
 
 
 # ═══════════════════════════════════════════════
@@ -28,11 +41,9 @@ def tile_str(t):
     if t < 0 or t > 36: return "?"
     s = (t // 9) if t < 34 else ((t - 34) // 9)
     v = (t % 9 + 1) if t < 34 else ((t - 34) % 9 + 1)
-    r = "r" if t >= 34 else ""
-    return f"{v}{SUIT_NAMES.get(s, '?')}{r}"
+    return f"{v}{SUIT_NAMES.get(s, '?')}{'r' if t >= 34 else ''}"
 
-def hand_str(tiles):
-    return ",".join(tile_str(t) for t in tiles)
+def hand_str(tiles): return ",".join(tile_str(t) for t in tiles)
 
 SUITS_MAN = range(0, 9)
 SUITS_PIN = range(9, 18)
@@ -44,53 +55,6 @@ YAOCHU = {0, 8, 9, 17, 18, 26, 27, 28, 29, 30, 31, 32, 33}
 # 2. 协议解码器
 # ═══════════════════════════════════════════════
 
-def find_json_str(data, pos=0):
-    """在 bytes 中查找 JSON 字符串起始位置"""
-    markers = [b'{"', b'[{']
-    results = []
-    for m in markers:
-        p = data.find(m, pos)
-        if p >= 0: results.append(p)
-    return min(results) if results else -1
-
-def try_parse_json(data):
-    """尝试从 bytes 中解析 JSON"""
-    try:
-        s = data.decode('utf-8', errors='replace').lstrip('\x00')
-        return json.loads(s)
-    except:
-        return None
-
-def try_decode_protobuf(data):
-    """简易 protobuf 解码 - 提取字符串字段"""
-    result = {}
-    pos = 0
-    strings = []
-    while pos < len(data):
-        if data[pos] == 0x0a:  # string field
-            pos += 1
-            strlen, n = _varint(data, pos)
-            pos = n
-            if pos + strlen <= len(data):
-                s = data[pos:pos+strlen].decode('utf-8', errors='replace')
-                if s.startswith('.lq.'):
-                    result['name'] = s
-                elif len(s) > 2:
-                    strings.append(s)
-                pos += strlen
-            else: break
-        elif data[pos] == 0x12:  # bytes field
-            pos += 1
-            strlen, n = _varint(data, pos)
-            pos = n
-            result['data'] = data[pos:pos+strlen] if pos+strlen <= len(data) else b''
-            pos += strlen if pos+strlen <= len(data) else 0
-        else:
-            pos += 1
-    if strings:
-        result['strings'] = strings
-    return result
-
 def _varint(data, pos):
     value = 0; shift = 0
     while pos < len(data):
@@ -101,137 +65,165 @@ def _varint(data, pos):
     return value, pos
 
 def decode_wrapper(data):
-    """解码 Wrapper 消息: 2字节长度 + protobuf"""
+    """解码 Wrapper: 2字节长度 + protobuf {name, data}"""
     if len(data) < 2: return None
     msg_len = struct.unpack('<H', data[:2])[0]
     if msg_len <= 0 or msg_len + 2 > len(data): return None
-    return try_decode_protobuf(data[2:2+msg_len])
 
-def decode_hand_tiles(data):
-    """从 new_round 消息中提取手牌"""
-    # 遍历所有 varint 提取牌 ID(0-36)
-    tiles = []
+    pos = 2; result = {"name": "", "data": b""}
+    end = pos + msg_len
+    while pos < end:
+        if pos >= len(data): break
+        tag = data[pos]; pos += 1
+        wire = tag & 0x07; field = tag >> 3
+
+        if field == 1 and wire == 2:  # name (string)
+            l, pos = _varint(data, pos)
+            result["name"] = data[pos:pos+l].decode('utf-8', errors='replace')
+            pos += l
+        elif field == 2 and wire == 2:  # data (bytes)
+            l, pos = _varint(data, pos)
+            result["data"] = data[pos:pos+l]
+            pos += l
+        elif wire == 0:  # varint skip
+            _, pos = _varint(data, pos)
+        elif wire == 2:  # len-delimited skip
+            l, pos = _varint(data, pos); pos += l
+        elif wire == 5:  # 32-bit skip
+            pos += 4
+        else:
+            pos += 1
+    return result
+
+def extract_varints(data):
+    """从 bytes 中提取所有 varint 值 (0-255)"""
+    vals = []
     pos = 0
     while pos < len(data):
-        tag = data[pos]; pos += 1
-        wire = tag & 0x07
+        b = data[pos]
+        if b & 0x80:  # not a field tag (tag < 128)
+            pos += 1; continue
+        # b is a field tag
+        wire = b & 0x07
+        pos += 1
         if wire == 0:  # varint
-            val, pos = _varint(data, pos)
-            if 0 <= val <= 36:
-                tiles.append(val)
-        elif wire == 2:  # length-delimited
-            strlen, pos = _varint(data, pos)
-            pos += strlen
+            v, pos = _varint(data, pos)
+            if v < 256: vals.append(v)
+        elif wire == 2:  # skip len-delimited
+            l, pos = _varint(data, pos); pos += l
         elif wire == 5:  # 32-bit
             pos += 4
         else:
-            break
-    # 过滤出合理的牌(前13-14枚是手牌)
-    hand = [t for t in tiles if 0 <= t <= 36]
-    return hand[:14] if len(hand) >= 13 else []
+            pos += 1
+    return vals
 
 
 # ═══════════════════════════════════════════════
-# 3. 牌局追踪器
+# 3. 牌局追踪器 + AI
 # ═══════════════════════════════════════════════
 
 class GameTracker:
-    """对局状态追踪"""
+    """对局状态追踪 + AI 决策"""
 
     def __init__(self):
         self.reset()
 
     def reset(self):
         self.in_game = False
-        self.seat = 0
-        self.hand = []
+        self.seat = 0; self.hand = []
         self.scores = [25000]*4
         self.deposits = [0]*4
-        self.round_wind = 0
-        self.round_num = 0
-        self.honba = 0
-        self.dealer = 0
-        self.left_tiles = 70
-        self.dora = -1
+        self.round_wind = 0; self.round_num = 0
+        self.honba = 0; self.dealer = 0
+        self.left_tiles = 70; self.dora = -1
         self.last_action = ""
         self.seen = [0]*37
-        # 玩家状态
         self.players = [{'discards':[], 'melds':[], 'liqi':False, 'score':25000}
                         for _ in range(4)]
 
-    def add_tile(self, t):
+    def add_seen(self, t):
         if 0 <= t < 37: self.seen[t] += 1
-
-    def remaining(self, t):
-        return 4 - (self.seen[t] if 0 <= t < 37 else 0)
 
     def on_new_round(self, data):
         self.reset()
         self.in_game = True
-        # 从 protobuf 里提取手牌
-        hand = decode_hand_tiles(data)
-        if hand:
-            self.hand = hand
-            for t in hand: self.add_tile(t)
-        ctx.log.info(f"[MOD] New round - hand({len(hand)}): {hand_str(self.hand[:5])}...")
-        self._log_event("new_round", {"hand_count": len(self.hand)})
+        vals = extract_varints(data)
+        # 手牌是 0-36 的值, 取前13-14个
+        tiles = [v for v in vals if 0 <= v <= 36]
+        if len(tiles) >= 13:
+            self.hand = tiles[:14]
+            for t in self.hand: self.add_seen(t)
+        log_info(f"NEW ROUND: seat={self.seat} hand({len(self.hand)}) dora={self.dora}")
 
-    def on_draw(self, tile):
-        if tile >= 0:
+    def on_draw(self, data):
+        vals = extract_varints(data)
+        tiles = [v for v in vals if 0 <= v <= 36]
+        if tiles:
+            tile = tiles[-1]
             self.hand.append(tile)
-            self.add_tile(tile)
-            ctx.log.info(f"[MOD] Draw: {tile_str(tile)} → {len(self.hand)} tiles")
+            self.add_seen(tile)
+            log_info(f"DRAW: {tile_str(tile)} → {len(self.hand)} tiles")
 
-    def on_discard(self, seat, tile, moqie=False):
-        if tile >= 0:
+    def on_discard(self, data):
+        vals = extract_varints(data)
+        tiles = [v for v in vals if 0 <= v <= 36]
+        tiles.sort()
+        if not tiles: return
+
+        # 简化: 最后一个 < 4 的是座位
+        seats = [v for v in tiles if 0 <= v <= 3]
+        seat = seats[-1] if seats else 0
+
+        # 牌是剩余中最大或最小的
+        discards_pool = [v for v in tiles if 10 <= v <= 36]
+        if discards_pool:
+            tile = discards_pool[-1]
+        else:
+            tile = tiles[-1]
+
+        if 0 <= tile <= 36:
             self.players[seat]['discards'].append(tile)
-            self.add_tile(tile)
+            self.add_seen(tile)
             if seat == self.seat and tile in self.hand:
                 self.hand.remove(tile)
-        if seat == self.seat:
-            ctx.log.info(f"[MOD] Self discard: {tile_str(tile)}")
-            self._trigger_ai()
+                self._trigger_ai()
 
     def _trigger_ai(self):
-        """触发 AI 决策 - 写入动作队列"""
-        if len(self.hand) <= 0:
-            return
-        decision = self._ai_decide()
-        with open(ACTION_QUEUE, 'w') as f:
-            json.dump(decision, f)
+        if not self.hand: return
+        decision = self._decide()
+        try:
+            with open(ACTION_QUEUE, 'w') as f:
+                json.dump(decision, f)
+        except: pass
 
-    def _ai_decide(self):
-        """AI 决策引擎(简版 向听数计算)"""
+    def _decide(self):
+        """AI 决策: 向听数最少 + 安全度最高"""
         if not self.hand: return {"action": "pass"}
         hand = self.hand[:]
-        best = self._evaluate(hand)
-        return {
-            "action": "discard",
-            "tile": best,
-            "tile_str": tile_str(best),
-            "hand": hand_str(hand),
-            "hand_count": len(hand),
-            "timestamp": time.time()
-        }
+        best_score = -999; best = hand[0]
 
-    def _evaluate(self, hand):
-        """选择要切的牌 - 向听数优先"""
-        from collections import Counter
-        best_score = -999
-        best_tile = hand[0]
-
-        for tile in set(hand):
+        for tile in sorted(set(hand)):
             new_hand = hand.copy()
             new_hand.remove(tile)
             shanten = self._calc_shanten(new_hand)
-            score = -shanten * 10
-            # 安全度
-            safety = self.remaining(tile)
-            score += safety
+            remaining = 4 - (self.seen[tile] if 0 <= tile < 37 else 0)
+            score = -shanten * 10 + remaining
             if score > best_score:
-                best_score = score
-                best_tile = tile
-        return best_tile
+                best_score = score; best = tile
+
+        # 找手牌中的位置索引
+        hand_positions = [i for i, t in enumerate(hand) if t == best]
+        pos = hand_positions[0] if hand_positions else 0
+
+        return {
+            "action": "discard",
+            "tile_id": best,
+            "tile_str": tile_str(best),
+            "hand_pos": pos,        # 手牌中的位置
+            "hand_count": len(hand),
+            "full_hand": hand_str(hand),
+            "timestamp": time.time()
+        }
 
     def _calc_shanten(self, hand):
         """向听数计算"""
@@ -240,8 +232,7 @@ class GameTracker:
             if 0 <= t < 34: counts[t] += 1
 
         def normal_shanten(counts, total):
-            needed = total // 3
-            best = 999
+            needed = total // 3; best = 999
             for i in range(34):
                 if counts[i] < 2: continue
                 counts[i] -= 2
@@ -259,33 +250,27 @@ class GameTracker:
                 s = 2*(target-melds)-partials-1
                 return -1 if s < -1 else s
             pos = next(i for i in range(34) if counts[i] > 0)
-            best = 999
-            c = counts[pos]
+            best = 999; c = counts[pos]
 
-            if pos < 27 and pos % 9 < 7 and counts[pos]>0 and counts[pos+1]>0 and counts[pos+2]>0:
+            if pos < 27 and pos%9<7 and counts[pos]>0 and counts[pos+1]>0 and counts[pos+2]>0:
                 counts[pos]-=1; counts[pos+1]-=1; counts[pos+2]-=1
                 s = _calc_mentsu(counts, target, melds+1, partials)
                 counts[pos]+=1; counts[pos+1]+=1; counts[pos+2]+=1
                 if s < best: best = s
-
             if c >= 3:
                 counts[pos]-=3; s = _calc_mentsu(counts, target, melds+1, partials)
-                counts[pos]+=3
-                if s < best: best = s
+                counts[pos]+=3; if s < best: best = s
             if c >= 2:
                 counts[pos]-=2; s = _calc_mentsu(counts, target, melds, partials+1)
-                counts[pos]+=2
-                if s < best: best = s
+                counts[pos]+=2; if s < best: best = s
             if pos < 27 and pos%9<8 and counts[pos]>0 and counts[pos+1]>0:
                 counts[pos]-=1; counts[pos+1]-=1
                 s = _calc_mentsu(counts, target, melds, partials+1)
-                counts[pos]+=1; counts[pos+1]+=1
-                if s < best: best = s
+                counts[pos]+=1; counts[pos+1]+=1; if s < best: best = s
             if pos < 27 and pos%9<7 and counts[pos]>0 and counts[pos+2]>0:
                 counts[pos]-=1; counts[pos+2]-=1
                 s = _calc_mentsu(counts, target, melds, partials+1)
-                counts[pos]+=1; counts[pos+2]+=1
-                if s < best: best = s
+                counts[pos]+=1; counts[pos+2]+=1; if s < best: best = s
 
             counts[pos] = 0
             s = _calc_mentsu(counts, target, melds, partials)
@@ -296,46 +281,20 @@ class GameTracker:
         total = len(hand)
         return normal_shanten(counts, total)
 
-    def _log_event(self, event_type, data=None):
-        try:
-            with open(EVENT_LOG, 'a') as f:
-                f.write(json.dumps({"t": time.time(), "e": event_type, "d": data}) + '\n')
-        except: pass
-
 
 # ═══════════════════════════════════════════════
-# 4. 日志工具 (不依赖 mitmproxy ctx)
-# ═══════════════════════════════════════════════
-
-_log_file = os.path.join(str(Path.home()), ".majsoul_automod", "logs", "addon.log")
-os.makedirs(os.path.dirname(_log_file), exist_ok=True)
-
-def log_info(msg):
-    try:
-        from mitmproxy import ctx
-        ctx.log.info(msg)
-    except:
-        pass
-    try:
-        with open(_log_file, 'a', encoding='utf-8') as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-    except:
-        pass
-
-
-# ═══════════════════════════════════════════════
-# 5. mitmproxy 插件入口
+# 4. mitmproxy 插件入口
 # ═══════════════════════════════════════════════
 
 class MajsoulAddon:
     def __init__(self):
         self.tracker = GameTracker()
-        log_info("[MOD] Addon loaded — waiting for WebSocket traffic...")
+        log_info("[MOD] Addon loaded")
 
     def websocket_message(self, flow):
         if not flow.messages: return
         msg = flow.messages[-1]
-        if msg.from_client: return  # 只处理服务端消息
+        if msg.from_client: return  # 只处理服务器→客户端
 
         data = msg.content
         if not data or len(data) < 4: return
@@ -343,31 +302,23 @@ class MajsoulAddon:
         try:
             wrapper = decode_wrapper(data)
             if not wrapper or 'name' not in wrapper: return
-
             name = wrapper['name']
             payload = wrapper.get('data', b'')
 
             if 'NotifyNewRound' in name:
                 self.tracker.on_new_round(payload)
-            elif 'NotifyDrawTile' in name:
-                tiles = decode_hand_tiles(payload)
-                if tiles: self.tracker.on_draw(tiles[-1])
+            elif 'NotifyDrawTile' in name or 'NotifyDealTile' in name:
+                self.tracker.on_draw(payload)
             elif 'NotifyDiscardTile' in name:
-                tiles = decode_hand_tiles(payload)
-                seat = next((t for t in tiles if 0 <= t <= 3), 0)
-                non_seat = [t for t in tiles if 3 < t <= 36]
-                discard = non_seat[-1] if non_seat else -1
-                self.tracker.on_discard(seat, discard)
-            elif 'NotifyLiqi' in name:
-                log_info("[MOD] Liqi declared")
+                self.tracker.on_discard(payload)
             elif 'NotifyHu' in name:
-                log_info("[MOD] Hu! Round ended")
+                log_info("[MOD] Round ended")
                 self.tracker.in_game = False
         except Exception as e:
-            log_info(f"[MOD] Error: {e}")
+            log_info(f"[MOD] parse error: {e}")
 
     def websocket_end(self, flow):
-        log_info("[MOD] WebSocket disconnected")
+        log_info("[MOD] WebSocket closed")
 
 
 addons = [MajsoulAddon]
