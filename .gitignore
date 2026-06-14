@@ -1,29 +1,10 @@
-# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-dist/
+*.pyc
+*.spec
 build/
-*.egg
-
-# Virtual env
-venv/
-.venv/
-env/
-
-# Config
-*.local.json
-
-# Logs
+dist/MajsoulAutoMod/
 *.log
 logs/
-
-# IDE
-.vs/
-.vscode/
-.idea/
-
-# OS
-Thumbs.db
-.DS_Store
+.majsoul_automod/
+venv/
+.venv/
