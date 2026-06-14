@@ -1,0 +1,14 @@
+D:\Code\MahjongSoulMod\setup\bin\Release\net8.0\win-x64\MahjongSoulMod_Setup.exe
+D:\Code\MahjongSoulMod\setup\bin\Release\net8.0\win-x64\MahjongSoulMod_Setup.deps.json
+D:\Code\MahjongSoulMod\setup\bin\Release\net8.0\win-x64\MahjongSoulMod_Setup.runtimeconfig.json
+D:\Code\MahjongSoulMod\setup\bin\Release\net8.0\win-x64\MahjongSoulMod_Setup.dll
+D:\Code\MahjongSoulMod\setup\bin\Release\net8.0\win-x64\MahjongSoulMod_Setup.pdb
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\Installer.GeneratedMSBuildEditorConfig.editorconfig
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\Installer.AssemblyInfoInputs.cache
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\Installer.AssemblyInfo.cs
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\Installer.csproj.CoreCompileInputs.cache
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\MahjongSoulMod_Setup.dll
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\refint\MahjongSoulMod_Setup.dll
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\MahjongSoulMod_Setup.pdb
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\Installer.genruntimeconfig.cache
+D:\Code\MahjongSoulMod\setup\obj\Release\net8.0\win-x64\ref\MahjongSoulMod_Setup.dll

@@ -1,0 +1,2 @@
+D:\Code\MahjongSoulMod\setup\publish\MahjongSoulMod_Setup.pdb
+D:\Code\MahjongSoulMod\setup\publish\MahjongSoulMod_Setup.exe

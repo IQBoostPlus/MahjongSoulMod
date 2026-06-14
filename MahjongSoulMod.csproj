@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>MahjongSoulMod</AssemblyName>
+    <RootNamespace>MahjongSoulMod</RootNamespace>
+    <OutputType>Library</OutputType>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <!-- 排除测试目录 -->
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <Content Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
+    <None Remove="tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BepInEx IL2CPP 核心库 -->
+    <Reference Include="BepInEx.Core" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\BepInEx.Core.dll" Private="false" />
+    <Reference Include="BepInEx.Unity.IL2CPP" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\BepInEx.Unity.IL2CPP.dll" Private="false" />
+    <Reference Include="BepInEx.Unity.Common" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\BepInEx.Unity.Common.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\0Harmony.dll" Private="false" />
+    <Reference Include="Il2CppInterop.Common" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\Il2CppInterop.Common.dll" Private="false" />
+    <Reference Include="Il2CppInterop.Runtime" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\Il2CppInterop.Runtime.dll" Private="false" />
+    <Reference Include="Il2CppInterop.HarmonySupport" HintPath="D:\Steam\steamapps\common\MahjongSoul\BepInEx\core\Il2CppInterop.HarmonySupport.dll" Private="false" />
+
+    <!-- Unity 引擎引用（Dummy DLLs 编译用，含标准 .NET 签名） -->
+    <Reference Include="UnityEngine" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.InputLegacyModule" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.InputLegacyModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.InputModule" HintPath="C:\Users\taccz\AppData\Local\Temp\il2cppdumper\DummyDll\UnityEngine.InputModule.dll" Private="false" />
+  </ItemGroup>
+
+</Project>
