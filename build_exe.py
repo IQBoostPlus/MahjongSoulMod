@@ -73,9 +73,9 @@ def build_exe():
     print("[1/3] PyInstaller 编译中...")
     result = subprocess.run(cmd, cwd=PROJECT_DIR, capture_output=False)
     if result.returncode != 0:
-        print("  ❌ PyInstaller 构建失败")
+        print("  [FAIL] PyInstaller 构建失败")
         return False
-    print("  ✅ 编译完成")
+    print("  [OK] 编译完成")
 
 
 def assemble_dist():
@@ -102,7 +102,7 @@ def assemble_dist():
     addon_src = os.path.join(PROJECT_DIR, "mitm", "addons.py")
     if os.path.isfile(addon_src):
         shutil.copy2(addon_src, os.path.join(DIST_DIR, "addon.py"))
-        print("  ✅ addon.py (mitm 插件)")
+        print("  [OK] addon.py (mitm 插件)")
 
     # 3. 模板目录
     templates_src = os.path.join(PROJECT_DIR, "templates")
@@ -111,7 +111,7 @@ def assemble_dist():
         if os.path.exists(templates_dst):
             shutil.rmtree(templates_dst)
         shutil.copytree(templates_src, templates_dst)
-        print("  ✅ templates/")
+        print("  [OK] templates/")
     else:
         os.makedirs(templates_dst, exist_ok=True)
         # 创建一个说明文件
@@ -122,7 +122,7 @@ def assemble_dist():
     config_src = os.path.join(PROJECT_DIR, "config", "settings.json")
     if os.path.isfile(config_src):
         shutil.copy2(config_src, os.path.join(DIST_DIR, "settings.json"))
-        print("  ✅ settings.json")
+        print("  [OK] settings.json")
 
     # 5. 清理 PyInstaller 中间文件
     build_dir = os.path.join(PROJECT_DIR, "build")
@@ -135,7 +135,7 @@ def assemble_dist():
     if os.path.isdir(build_exe_dir):
         shutil.rmtree(build_exe_dir)
 
-    print("  ✅ 组装完成")
+    print("  [OK] 组装完成")
 
 
 def create_readme():
@@ -160,7 +160,7 @@ def create_readme():
 
     pip install mitmproxy
 
-  ⚠️ mitmproxy 必须单独安装，因为它以独立进程运行
+  [!] mitmproxy 必须单独安装，因为它以独立进程运行
 
 ══════════════════════════════════════════════════════
   第二步: 安装 CA 证书
@@ -177,7 +177,7 @@ def create_readme():
   Windows 代理设置方法:
     设置 → 网络和 Internet → 代理 → 手动设置代理
     地址: 127.0.0.1  端口: 8080
-    ✅ 勾选「对所有协议使用相同的代理服务器」
+    [OK] 勾选「对所有协议使用相同的代理服务器」
 
 ══════════════════════════════════════════════════════
   第三步: 启动 MOD
@@ -260,7 +260,7 @@ def create_readme():
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(readme)
 
-    print(f"  ✅ 使用教程.txt")
+    print(f"  [OK] 使用教程.txt")
 
 
 def create_launcher_bat():
@@ -286,7 +286,7 @@ pause
     bat_path = os.path.join(DIST_DIR, "启动雀魂MOD.bat")
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(bat_content)
-    print(f"  ✅ 启动雀魂MOD.bat")
+    print(f"  [OK] 启动雀魂MOD.bat")
 
 
 def main():
