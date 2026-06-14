@@ -11,8 +11,31 @@
 import logging
 import os
 import sys
+import io
 from datetime import datetime
 from pathlib import Path
+
+
+def _ensure_utf8_stdout():
+    """确保 stdout 使用 UTF-8 编码 (修复 Windows GBK 乱码)"""
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+    if sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+        try:
+            sys.stdout = io.TextIOWrapper(
+                sys.stdout.buffer, encoding="utf-8", errors="replace"
+            )
+            sys.stderr = io.TextIOWrapper(
+                sys.stderr.buffer, encoding="utf-8", errors="replace"
+            )
+        except Exception:
+            pass
 
 
 class _LoggerImpl:
@@ -27,10 +50,13 @@ class _LoggerImpl:
             return
         self._setup_done = True
 
+        # 必须在创建 handler 之前修复编码
+        _ensure_utf8_stdout()
+
         self._logger = logging.getLogger("MajsoulAutoMod")
         self._logger.setLevel(logging.DEBUG)
 
-        # 控制台 handler (INFO 级别)
+        # 控制台 handler (INFO 级别, UTF-8)
         console = logging.StreamHandler(sys.stdout)
         console.setLevel(logging.INFO)
         console.setFormatter(logging.Formatter(
@@ -39,7 +65,7 @@ class _LoggerImpl:
         ))
         self._logger.addHandler(console)
 
-        # 文件 handler (DEBUG 级别)
+        # 文件 handler (DEBUG 级别, UTF-8)
         log_dir = os.path.join(str(Path.home()), ".majsoul_automod", "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(

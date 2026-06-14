@@ -1,33 +1,63 @@
 #!/usr/bin/env python3
-"""
-雀魂自动打牌 MOD - 主入口
-
-使用方式:
-  1. 完整模式 (mitmproxy + AI + 自动操作):
-     python main.py
-
-  2. 仅监听模式 (只显示牌局信息, 不自动操作):
-     python main.py --listen-only
-
-  3. 命令行调试模式:
-     python main.py --cli
-
-要求:
-  - Python 3.10+
-  - pip install mitmproxy pyautogui pygetwindow pynput
-
-工作原理:
-  1. 启动 mitmproxy 作为系统代理
-  2. 拦截雀魂 WebSocket → liqi 协议解码
-  3. GameTracker 重建完整牌局状态
-  4. AI 引擎分析 → 最佳决策
-  5. ActionExecutor 通过 pyautogui 模拟鼠标操作
-"""
+#
+# 雀魂自动打牌 MOD - 主入口
+#
+# 使用方式:
+#   1. 完整模式 (mitmproxy + AI + 自动操作):
+#      python main.py
+#
+#   2. 仅监听模式 (只显示牌局信息, 不自动操作):
+#      python main.py --listen-only
+#
+#   3. 命令行调试模式:
+#      python main.py --cli
+#
+# 要求:
+#   - Python 3.10+
+#   - pip install mitmproxy pyautogui pygetwindow pynput
+#
+# 工作原理:
+#   1. 启动 mitmproxy 作为系统代理
+#   2. 拦截雀魂 WebSocket → liqi 协议解码
+#   3. GameTracker 重建完整牌局状态
+#   4. AI 引擎分析 → 最佳决策
+#   5. ActionExecutor 通过 pyautogui 模拟鼠标操作
+#
 
 import argparse
 import os
 import sys
 import threading
+import io
+
+# ══════════════════════════════════════════════════════════
+#  UTF-8 编码修复 — 必须在任何其他 import 之前执行
+#  解决 Windows 中文终端 GBK 编码导致的乱码问题
+# ══════════════════════════════════════════════════════════
+
+def _fix_encoding():
+    """强制 stdout/stderr 使用 UTF-8"""
+    if sys.platform == "win32":
+        # 方法1: 重新配置 stdout/stderr
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                try:
+                    stream.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+        # 方法2: 备选 — 用 TextIOWrapper 包装
+        if sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+            try:
+                sys.stdout = io.TextIOWrapper(
+                    sys.stdout.buffer, encoding="utf-8", errors="replace"
+                )
+                sys.stderr = io.TextIOWrapper(
+                    sys.stderr.buffer, encoding="utf-8", errors="replace"
+                )
+            except Exception:
+                pass
+
+_fix_encoding()
 import time
 import signal
 import subprocess
