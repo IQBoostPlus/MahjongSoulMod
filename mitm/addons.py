@@ -4,35 +4,25 @@ mitmproxy 插件脚本
 拦截雀魂 WebSocket 消息:
 1. 解码 liqi 协议二进制消息
 2. 传递给 GameTracker 更新牌局状态
-3. 触发 AI 决策和动作执行
+3. 通过 EventBus 触发 AI 决策和动作执行
 
 用法: mitmdump -s addons.py --listen-port 8080
 """
 
 from mitmproxy import ctx, http, websocket
-from mitmproxy.proxy import layers
 import json
 
+from core.context import AppContext
 from proto import LiqiDecoder, MSG_NAMES_S2C
-from game_state import GameTracker
-from action import ActionExecutor
-from ai import AIDecisionMaker
 from utils.log import Logger
 
 
 class MajsoulAddon:
-    """mitmproxy 主插件"""
+    """mitmproxy 主插件 — 使用共享 AppContext 组件"""
 
     def __init__(self):
-        self.tracker = GameTracker()
-        self.ai = AIDecisionMaker()
-        self.executor = ActionExecutor()
-        self._last_state = None
-
-        # 注册状态更新回调
-        self.tracker.add_callback(self._on_state_update)
-
-        Logger.info("MajsoulAddon initialized")
+        self._ctx = AppContext.get()
+        Logger.info("MajsoulAddon initialized (shared context)")
 
     def websocket_message(self, flow: websocket.WebSocketFlow):
         """处理 WebSocket 消息"""
@@ -50,24 +40,30 @@ class MajsoulAddon:
         if not is_from_server:
             return
 
-        # 解码 liqi 协议
+        # 解码 liqi 协议 (两层: Wrapper + 内层消息)
         parsed = LiqiDecoder.decode_message(data)
-        if parsed is None or not parsed["name"]:
+        if parsed is None or not parsed.get("name"):
             return
 
         msg_name = parsed["name"]
         msg_data = parsed["data"]
 
-        # 简化消息名
-        short_name = MSG_NAMES_S2C.get(msg_name, msg_name)
-        Logger.debug(f"WS < {short_name} ({len(data)} bytes)")
+        Logger.debug(f"WS < {msg_name} ({len(data)} bytes)")
 
-        # 传递给状态追踪器
-        self.tracker.on_game_event(short_name, msg_data)
+        # 传递给共享的 GameTracker (自动通过 EventBus 广播)
+        self._ctx.tracker.on_game_event(msg_name, msg_data)
 
     def websocket_end(self, flow: websocket.WebSocketFlow):
         """WebSocket 连接关闭"""
-        Logger.info("WebSocket connection closed")
+        Logger.info("WebSocket connection closed — game may have ended")
+
+    # ── HTTP 请求过滤 (可选) ──
+
+    def request(self, flow: http.HTTPFlow):
+        """过滤非雀魂流量"""
+        host = flow.request.pretty_host
+        if "mahjongsoul" in host or "maj-soul" in host:
+            Logger.debug(f"HTTP → {host}")
 
 
 # mitmproxy 需要的入口

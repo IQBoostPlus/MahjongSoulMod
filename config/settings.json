@@ -1,0 +1,23 @@
+{
+  "proxy_port": 8080,
+  "proxy_host": "127.0.0.1",
+  "mitm_web_port": 8081,
+  "browser_type": "chrome",
+  "window_title": "雀魂",
+  "aggression": 3,
+  "speed": 3,
+  "risk_tolerance": 3,
+  "auto_discard": true,
+  "auto_call": true,
+  "auto_riichi": true,
+  "auto_agari": true,
+  "min_delay_ms": 300,
+  "max_delay_ms": 1500,
+  "safety_mode": true,
+  "error_rate": 0.02,
+  "toggle_key": "F6",
+  "kill_switch_key": "F7",
+  "log_level": "INFO",
+  "log_to_file": true,
+  "log_file": null
+}

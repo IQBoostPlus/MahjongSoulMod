@@ -12,7 +12,7 @@ class Config:
 
     def __init__(self, path: str = None):
         if path is None:
-            path = os.path.join(Path(__file__).parent, "config", "settings.json")
+            path = os.path.join(Path(__file__).parent, "settings.json")
         self.path = path
         self._data = self._load()
 

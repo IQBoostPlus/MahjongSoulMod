@@ -9,19 +9,19 @@
   2. 仅监听模式 (只显示牌局信息, 不自动操作):
      python main.py --listen-only
 
-  3. 命令行模式:
+  3. 命令行调试模式:
      python main.py --cli
 
 要求:
   - Python 3.10+
-  - pip install mitmproxy pyautogui pygetwindow
+  - pip install mitmproxy pyautogui pygetwindow pynput
 
 工作原理:
   1. 启动 mitmproxy 作为系统代理
-  2. 拦截雀魂 (mahjong-soul.com) 的 WebSocket 连接
-  3. 解码 liqi 协议 → 重建完整牌局状态
+  2. 拦截雀魂 WebSocket → liqi 协议解码
+  3. GameTracker 重建完整牌局状态
   4. AI 引擎分析 → 最佳决策
-  5. 通过 pyautogui 模拟鼠标操作
+  5. ActionExecutor 通过 pyautogui 模拟鼠标操作
 """
 
 import argparse
@@ -36,37 +36,28 @@ from pathlib import Path
 # 确保项目目录在 sys.path 中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core.context import AppContext
+from core.events import GameEvent
 from utils.log import Logger
-from config import cfg
-from game_state import GameTracker
-from ai import AIDecisionMaker
-from action import ActionExecutor
-from proto import LiqiDecoder
 
 
 class MajsoulAutoMod:
     """
     雀魂自动打牌 MOD 主控制器
 
-    协调各子系统:
-      - mitmproxy → 网络拦截
-      - GameTracker → 状态追踪
-      - AIDecisionMaker → AI 决策
-      - ActionExecutor → 动作执行
+    职责:
+      - 启动/管理 mitmproxy 进程
+      - 键盘快捷键监听
+      - 主循环 (保活)
     """
 
     def __init__(self, listen_only: bool = False):
         self.listen_only = listen_only
-        self.running = False
         self._mitm_process = None
+        self._keyboard_listener = None
+        self._ctx = AppContext.get()
 
-        # 组件
-        self.tracker = GameTracker()
-        self.ai = AIDecisionMaker()
-        self.executor = ActionExecutor()
-
-        # 注册状态回调
-        self.tracker.add_callback(self._on_state_update)
+        self._ctx.set_listen_only(listen_only)
 
         Logger.info("=" * 50)
         Logger.info("  雀魂自动打牌 MOD v2.0")
@@ -75,32 +66,38 @@ class MajsoulAutoMod:
 
     def start(self):
         """启动 MOD"""
-        self.running = True
-
         # 启动 mitmproxy
         self._start_mitmproxy()
 
+        # 启动快捷键监听 (非阻塞)
+        self._start_hotkeys()
+
         Logger.info("MOD 已启动")
         Logger.info("请在浏览器中设置代理: 127.0.0.1:8080")
-        Logger.info("或通过启动脚本自动启动浏览器")
+        Logger.info("按 F6 切换自动模式 | F7 紧急停止")
 
-        # 主循环
+        # 主循环 — 保持进程存活
         try:
-            while self.running:
-                time.sleep(1)
+            while self._ctx.running:
+                time.sleep(0.5)
         except KeyboardInterrupt:
-            Logger.info("收到退出信号")
+            Logger.info("收到 Ctrl+C 退出信号")
         finally:
             self.stop()
 
     def stop(self):
         """停止 MOD"""
-        self.running = False
+        self._ctx.stop()
+        self._stop_hotkeys()
         self._stop_mitmproxy()
         Logger.info("MOD 已停止")
 
+    # ── mitmproxy 进程管理 ──
+
     def _start_mitmproxy(self):
         """启动 mitmproxy 后台进程"""
+        from config import cfg
+
         port = cfg.get("proxy_port", 8080)
         web_port = cfg.get("mitm_web_port", 8081)
 
@@ -121,12 +118,10 @@ class MajsoulAutoMod:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            Logger.info(f"mitmproxy started on port {port} (web: {web_port})")
+            Logger.info(f"mitmproxy started on port {port} (web UI: {web_port})")
         except FileNotFoundError:
-            Logger.error(
-                "mitmproxy not found! Install: pip install mitmproxy"
-            )
-            Logger.info("Running in debug mode (no network capture)")
+            Logger.error("mitmproxy not found! 请安装: pip install mitmproxy")
+            Logger.info("将以调试模式运行 (无网络拦截)")
 
     def _stop_mitmproxy(self):
         """停止 mitmproxy"""
@@ -134,50 +129,49 @@ class MajsoulAutoMod:
             self._mitm_process.terminate()
             try:
                 self._mitm_process.wait(timeout=5)
-            except:
+            except subprocess.TimeoutExpired:
                 self._mitm_process.kill()
             self._mitm_process = None
             Logger.info("mitmproxy stopped")
 
-    def _on_state_update(self, msg_name: str, state):
-        """游戏状态更新回调"""
-        if not state.in_game:
-            return
+    # ── 键盘快捷键 ──
 
+    def _start_hotkeys(self):
+        """启动全局热键监听"""
         try:
-            # 更新 AI 策略
-            self.ai.on_state_update(state)
+            from pynput import keyboard
 
-            # 自动模式: 触发决策
-            if not self.listen_only:
-                self._auto_decision(state)
+            def on_press(key):
+                try:
+                    if key == keyboard.Key.f6:
+                        self._ctx.event_bus.publish(GameEvent.TOGGLE_AUTO)
+                    elif key == keyboard.Key.f7:
+                        self._ctx.event_bus.publish(GameEvent.KILL_SWITCH)
+                except Exception:
+                    pass
 
-        except Exception as e:
-            Logger.error(f"Decision error: {e}")
+            self._keyboard_listener = keyboard.Listener(on_press=on_press)
+            self._keyboard_listener.daemon = True
+            self._keyboard_listener.start()
+            Logger.info("快捷键监听已启动 (F6=切换, F7=停止)")
+        except ImportError:
+            Logger.warning("pynput 未安装，快捷键不可用。安装: pip install pynput")
 
-    def _auto_decision(self, state):
-        """自动决策和执行"""
-        # 检测需要决策的场景
-        hand = state.players[state.self_seat].hand
-
-        # 刚摸牌后
-        if state.last_action == "draw" and len(hand) > 13:
-            decision = self.ai.decide_discard(state)
-            self.executor.execute(decision)
-
-        # 对手出牌后可鸣牌
-        if state.last_action == "discard" and len(hand) <= 13:
-            # TODO: 检测鸣牌按钮是否存在
-            pass
+    def _stop_hotkeys(self):
+        """停止热键监听"""
+        if self._keyboard_listener:
+            try:
+                self._keyboard_listener.stop()
+            except Exception:
+                pass
+            self._keyboard_listener = None
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="雀魂自动打牌 MOD"
-    )
+    parser = argparse.ArgumentParser(description="雀魂自动打牌 MOD")
     parser.add_argument(
         "--listen-only", action="store_true",
-        help="仅监听对局信息, 不自动操作"
+        help="仅监听对局信息，不自动操作"
     )
     parser.add_argument(
         "--cli", action="store_true",
@@ -185,14 +179,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # 安装证书提示
-    cert_path = os.path.join(
-        str(Path.home()), ".mitmproxy", "mitmproxy-ca-cert.p12"
-    )
-    if not os.path.exists(cert_path):
-        Logger.info("首次运行需要安装 mitmproxy CA 证书")
-        Logger.info("请信任该证书以拦截 HTTPS 连接")
-        Logger.info("证书生成在: " + cert_path)
+    # CA 证书提示
+    cert_dir = os.path.join(str(Path.home()), ".mitmproxy")
+    if not os.path.exists(cert_dir):
+        Logger.info("首次运行需要 mitmproxy CA 证书")
+        Logger.info("启动后访问 http://mitm.it 下载并信任证书")
 
     # 启动
     mod = MajsoulAutoMod(listen_only=args.listen_only)
