@@ -4,7 +4,23 @@
 
 import json
 import os
+import sys
 from pathlib import Path
+
+
+def _get_default_config_path() -> str:
+    """获取配置文件路径 — 兼容开发模式和 PyInstaller 打包"""
+    # 优先: exe 同级目录的 settings.json (用户可编辑)
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        external = os.path.join(exe_dir, "settings.json")
+        if os.path.isfile(external):
+            return external
+        # 不存在则创建在 exe 同级目录
+        return external
+
+    # 开发模式: config/settings.json
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 
 class Config:
@@ -12,7 +28,7 @@ class Config:
 
     def __init__(self, path: str = None):
         if path is None:
-            path = os.path.join(Path(__file__).parent, "settings.json")
+            path = _get_default_config_path()
         self.path = path
         self._data = self._load()
 

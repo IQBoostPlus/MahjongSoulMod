@@ -34,7 +34,15 @@ import subprocess
 from pathlib import Path
 
 # 确保项目目录在 sys.path 中
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# PyInstaller 打包后使用 sys._MEIPASS，开发模式使用脚本所在目录
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = sys._MEIPASS
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _BASE_DIR)
+
+# 外部文件目录 (exe 同级目录) — 用于配置文件、addon 脚本等
+_EXTERNAL_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
 
 from core.context import AppContext
 from core.events import GameEvent
@@ -101,10 +109,14 @@ class MajsoulAutoMod:
         port = cfg.get("proxy_port", 8080)
         web_port = cfg.get("mitm_web_port", 8081)
 
-        addon_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "mitm", "addons.py"
-        )
+        # 查找 addon 脚本: 优先 exe 同级目录的 addon.py，其次项目目录下的 mitm/addons.py
+        addon_path = os.path.join(_EXTERNAL_DIR, "addon.py")
+        if not os.path.isfile(addon_path):
+            addon_path = os.path.join(_BASE_DIR, "mitm", "addons.py")
+        if not os.path.isfile(addon_path):
+            Logger.error(f"Addon script not found! Checked: {_EXTERNAL_DIR}/addon.py, {_BASE_DIR}/mitm/addons.py")
+            Logger.info("将以调试模式运行 (无网络拦截)")
+            return
 
         try:
             self._mitm_process = subprocess.Popen(
