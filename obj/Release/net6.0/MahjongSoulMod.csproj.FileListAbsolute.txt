@@ -1,8 +1,0 @@
-D:\Code\MahjongSoulMod\bin\Release\net6.0\MahjongSoulMod.deps.json
-D:\Code\MahjongSoulMod\bin\Release\net6.0\MahjongSoulMod.dll
-D:\Code\MahjongSoulMod\obj\Release\net6.0\MahjongSoulMod.csproj.AssemblyReference.cache
-D:\Code\MahjongSoulMod\obj\Release\net6.0\MahjongSoulMod.GeneratedMSBuildEditorConfig.editorconfig
-D:\Code\MahjongSoulMod\obj\Release\net6.0\MahjongSoulMod.csproj.CoreCompileInputs.cache
-D:\Code\MahjongSoulMod\obj\Release\net6.0\MahjongSoulMod.dll
-D:\Code\MahjongSoulMod\obj\Release\net6.0\refint\MahjongSoulMod.dll
-D:\Code\MahjongSoulMod\obj\Release\net6.0\ref\MahjongSoulMod.dll

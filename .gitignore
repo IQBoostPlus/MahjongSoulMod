@@ -1,0 +1,35 @@
+# Build output
+bin/
+obj/
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET Core
+*.log
+*.deps.json
+*.runtimeconfig.json
+
+# NuGet
+packages/
+*.nupkg
+**/[Pp]ackages/*
+
+# Test results
+TestResults/
+
+# Setup build
+setup/bin/
+setup/obj/
+setup/publish/
+setup/cpp2il/
+
+# OS files
+Thumbs.db
+.DS_Store
