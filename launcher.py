@@ -1,28 +1,99 @@
 #!/usr/bin/env python3
-"""雀魂自动打牌 MOD 启动器"""
+"""雀魂自动打牌 MOD v2.0"""
 
-import os, sys, subprocess, time, json, atexit, tempfile, shutil, ctypes
+import os, sys, subprocess, time, json, atexit, tempfile, \
+       shutil, ctypes, threading, struct
 from pathlib import Path
 
-
-def resource_path(relative_path):
-    try:
-        base = sys._MEIPASS
-    except:
-        base = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base, relative_path)
+# Optional GUI support
+try: import pyautogui
+except: pyautogui = None
+try: import pygetwindow as gw
+except: gw = None
 
 
-def log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}")
+LOG = lambda msg: print(f"[{time.strftime('%H:%M:%S')}] {msg}")
+ACTION_QUEUE = os.path.join(str(Path.home()), ".majsoul_automod", "action_queue.json")
+os.makedirs(os.path.join(str(Path.home()), ".majsoul_automod", "logs"), exist_ok=True)
 
+
+def resource_path(p):
+    try: base = sys._MEIPASS
+    except: base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, p)
+
+
+# ═══════════════════════════════════════════════
+# 动作执行器
+# ═══════════════════════════════════════════════
+
+class ActionExecutor(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.running = True
+
+    def run(self):
+        while self.running:
+            try:
+                if not os.path.exists(ACTION_QUEUE):
+                    time.sleep(0.5); continue
+                with open(ACTION_QUEUE) as f:
+                    action = json.load(f)
+                os.remove(ACTION_QUEUE)
+
+                if action.get("action") == "discard":
+                    self._discard(action)
+                elif action.get("action") == "riichi":
+                    LOG(f"立直: 打 {action.get('tile_str','?')}")
+            except: time.sleep(1)
+
+    def _discard(self, action):
+        tile = action.get("tile", 0)
+        LOG(f"打牌: {action.get('tile_str','?')} [{tile}]")
+
+        if gw is None or pyautogui is None:
+            LOG("  (需安装: pip install pyautogui pygetwindow)")
+            return
+
+        try:
+            wins = gw.getWindowsWithTitle("雀魂") or \
+                   gw.getWindowsWithTitle("MahjongSoul") or \
+                   gw.getWindowsWithTitle("Jantama")
+            if not wins:
+                LOG("  未找到游戏窗口"); return
+            win = wins[0]
+            if win.isMinimized: win.restore()
+            win.activate()
+            time.sleep(0.3)
+
+            x, y, w, h = win.left, win.top, win.width, win.height
+
+            # 手牌区域: 窗口底部 ~25%
+            ty = y + int(h * 0.78)
+            tx0 = x + int(w * 0.08)
+            tx1 = x + int(w * 0.92)
+            slot = (tx1 - tx0) // 14
+            idx = min(abs(tile) % 14, 13)
+            cx = tx0 + slot * idx + slot // 2
+
+            # 移动到手牌
+            pyautogui.moveTo(cx - 30, ty - 10, duration=0.08)
+            time.sleep(0.05)
+            pyautogui.moveTo(cx, ty + 10, duration=0.06)
+            time.sleep(0.1)
+            pyautogui.click()
+            LOG(f"  点击手牌: ({cx}, {ty+10})")
+        except Exception as e:
+            LOG(f"  异常: {e}")
+
+
+# ═══════════════════════════════════════════════
+# 工具函数
+# ═══════════════════════════════════════════════
 
 def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
+    try: return ctypes.windll.shell32.IsUserAnAdmin()
+    except: return False
 
 def set_proxy(enable, host="127.0.0.1", port=8080):
     try:
@@ -41,62 +112,50 @@ def set_proxy(enable, host="127.0.0.1", port=8080):
         ctypes.windll.wininet.InternetSetOptionW(0, 39, 0, 0)
         ctypes.windll.wininet.InternetSetOptionW(0, 37, 0, 0)
         return True
-    except:
-        return False
-
+    except: return False
 
 def find_mitmdump():
-    candidates = [
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "mitmdump.exe"),
-        os.path.join(os.path.dirname(sys.executable), "Scripts", "mitmdump.exe"),
-    ]
     for p in os.environ.get("PATH", "").split(";"):
         c = os.path.join(p, "mitmdump.exe")
-        if os.path.exists(c):
-            return c
-    for c in candidates:
-        if os.path.exists(c):
-            return c
+        if os.path.exists(c): return c
+    for p in [os.path.join(os.path.dirname(sys.executable), "Scripts"),
+              os.path.dirname(os.path.abspath(__file__))]:
+        c = os.path.join(p, "mitmdump.exe")
+        if os.path.exists(c): return c
     return None
 
+
+# ═══════════════════════════════════════════════
+# 主入口
+# ═══════════════════════════════════════════════
 
 def main():
     print("=" * 50)
     print("  雀魂自动打牌 MOD v2.0")
-    print("=" * 50)
-    print()
+    print("=" * 50 + "\n")
 
     admin = is_admin()
-    log(f"管理员权限: {'是' if admin else '否'}")
+    LOG(f"管理员: {'是' if admin else '否'}")
+    if gw is None: LOG("提示: pip install pyautogui pygetwindow 提升精度")
 
-    # 1. 提取 addon.py 到临时目录
+    # 1. 提取 addon
     addon_src = resource_path("addon.py")
     addon_tmp = os.path.join(tempfile.gettempdir(), "majsoul_addon.py")
+    if not os.path.exists(addon_src):
+        LOG("addon.py 未找到!"); input("按 Enter 退出..."); return
+    shutil.copy2(addon_src, addon_tmp)
 
-    if os.path.exists(addon_src):
-        shutil.copy2(addon_src, addon_tmp)
-        log(f"Addon: {addon_tmp}")
-    else:
-        log(f"错误: addon.py 未找到!")
-        input("\n按 Enter 退出...")
-        return
-
-    # 2. 启动 mitmproxy
+    # 2. mitmdump
     mitmdump = find_mitmdump()
     if not mitmdump:
-        log("错误: mitmdump.exe 未找到! 请安装 mitmproxy: pip install mitmproxy")
-        input("\n按 Enter 退出...")
-        return
+        LOG("mitmdump.exe 未找到! 安装: pip install mitmproxy")
+        input("按 Enter 退出..."); return
+    LOG(f"mitmdump: {mitmdump}")
 
-    log(f"mitmdump: {mitmdump}")
-
-    # 清理旧进程
-    try:
-        subprocess.run(["taskkill", "/f", "/im", "mitmdump.exe"],
-                       capture_output=True, timeout=3)
-        time.sleep(1)
-    except:
-        pass
+    try: subprocess.run(["taskkill", "/f", "/im", "mitmdump.exe"],
+                        capture_output=True, timeout=3)
+    except: pass
+    time.sleep(1)
 
     mitm_proc = None
     try:
@@ -104,60 +163,49 @@ def main():
             [mitmdump, "-s", addon_tmp, "--listen-port", "8080",
              "--set", "ssl_insecure=true"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW
-        )
+            creationflags=subprocess.CREATE_NO_WINDOW)
         time.sleep(2)
         if mitm_proc.poll() is not None:
-            log(f"mitmproxy 启动失败 (code: {mitm_proc.poll()})")
-            log("端口 8080 被占用或 mitmproxy 配置错误")
-            mitm_proc = None
+            LOG(f"mitmproxy 启动失败 (code: {mitm_proc.poll()})")
+            LOG("端口 8080 被占用, 请检查"); mitm_proc = None
         else:
-            log(f"mitmproxy 已启动 (PID: {mitm_proc.pid})")
+            LOG(f"mitmproxy 已启动 (PID: {mitm_proc.pid})")
     except Exception as e:
-        log(f"mitmproxy 启动异常: {e}")
+        LOG(f"mitmproxy 异常: {e}")
 
-    # 清理函数
     def cleanup():
+        nonlocal mitm_proc
         if mitm_proc:
             mitm_proc.terminate()
-            try:
-                mitm_proc.wait(timeout=3)
-            except:
-                mitm_proc.kill()
-            log("mitmproxy 已停止")
-        if admin:
-            set_proxy(False)
-            log("系统代理已恢复")
+            try: mitm_proc.wait(timeout=3)
+            except: mitm_proc.kill()
+        if admin: set_proxy(False)
+        LOG("已清理")
 
     atexit.register(cleanup)
 
-    # 设置系统代理
     if admin and mitm_proc:
-        set_proxy(True)
-        log("系统代理已启用")
-    elif not admin:
-        log("需要管理员权限才能自动设置代理")
-        log("请手动设置: 设置 → 网络 → 代理 → 127.0.0.1:8080")
+        set_proxy(True); LOG("系统代理: 127.0.0.1:8080")
+    else:
+        LOG("请手动设置系统代理: 127.0.0.1:8080")
 
-    print()
-    print("  MOD 已就绪!")
-    print()
-    print("  1. 通过 Steam 启动雀魂")
-    print("  2. 进入对局")
-    print()
-    print("  按 Ctrl+C 停止")
-    print()
+    # 3. 启动动作执行器
+    executor = ActionExecutor()
+    executor.start()
+    LOG("动作执行器已启动\n")
+
+    print("  使用说明:")
+    print("  1. Steam 启动雀魂")
+    print("  2. 进入对局即可自动打牌")
+    print("  3. Ctrl+C 停止\n")
 
     try:
-        while True:
-            time.sleep(1)
+        while True: time.sleep(1)
     except KeyboardInterrupt:
-        print()
-        log("正在停止...")
+        LOG("\n正在停止...")
 
+    executor.running = False
     cleanup()
-    input("\n按 Enter 退出...")
-
 
 if __name__ == "__main__":
     main()
