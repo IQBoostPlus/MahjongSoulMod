@@ -34,10 +34,13 @@
 ```
 MajsoulAutoMod/
 ├── main.py                  # 主入口
-├── setup.py                 # 一键安装器
+├── build_exe.py             # 打包为 .exe
 ├── requirements.txt         # 依赖
+├── core/
+│   ├── events.py            # 事件总线
+│   └── context.py           # 应用上下文
 ├── proto/
-│   ├── __init__.py          # liqi 协议编解码器
+│   ├── __init__.py          # liqi 协议编解码器 (两层解析)
 │   └── liqi.proto           # Protobuf 协议定义
 ├── mitm/
 │   └── addons.py            # mitmproxy 插件
@@ -45,28 +48,20 @@ MajsoulAutoMod/
 │   └── tracker.py           # 对局状态追踪
 ├── ai/
 │   ├── shanten.py           # 向听数计算 (3种: 标准/七对子/国士)
-│   └── engine.py            # AI 决策引擎
+│   └── engine.py            # AI 决策引擎 (含宝牌/防守/Dora)
 ├── action/
-│   └── executor.py          # 动作执行 (鼠标模拟)
+│   └── executor.py          # 动作执行 (鼠标模拟 + 图像识别)
 ├── config/
 │   └── __init__.py          # 配置中心
 ├── utils/
 │   └── log.py               # 日志系统
-├── tests/
-│   └── test_shanten.py      # 向听数测试 (12项)
-└── setup/
-    └── installer.py         # 安装程序
+└── tests/
+    └── test_shanten.py      # 向听数测试 (12项)
 ```
 
 ## 安装
 
-### 方式一: 一键安装
-
-```bash
-python setup.py
-```
-
-### 方式二: 手动安装
+### 从源码运行
 
 ```bash
 # 1. 安装依赖
@@ -74,6 +69,18 @@ pip install -r requirements.txt
 
 # 2. 运行 MOD
 python main.py
+```
+
+### 打包为 .exe
+
+```bash
+# 安装 PyInstaller
+pip install pyinstaller
+
+# 一键打包
+python build_exe.py
+
+# 输出在 dist/MajsoulAutoMod/
 ```
 
 ## 使用
