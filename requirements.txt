@@ -16,3 +16,14 @@ pynput>=1.7.0
 # 屏幕截图 + 图像识别 (按钮模板匹配)
 opencv-python>=4.8.0
 numpy>=1.24.0
+
+# 网易 Airtest 图像识别引擎 (推荐, 更高精度)
+# 安装: pip install airtest
+airtest>=1.3.0
+
+# DXGI 高速屏幕采集 (~3ms/帧, Windows only)
+dxcam>=0.3.0
+
+# PaddleOCR 分数/文字识别 (可选)
+paddleocr>=3.0.0
+paddlepaddle>=3.0.0

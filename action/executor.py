@@ -228,7 +228,7 @@ class ActionExecutor:
     # ── 窗口管理 ──
 
     def _find_window(self) -> bool:
-        """查找游戏窗口 (带缓存)"""
+        """查找游戏窗口 (带缓存，严格匹配)"""
         if self._window is not None:
             try:
                 if self._window.visible:
@@ -237,18 +237,54 @@ class ActionExecutor:
                 self._window = None
 
         try:
-            # 尝试多个可能的窗口标题
-            titles = [self._window_title, "Mahjong Soul", "雀魂麻将", "Majsoul"]
-            for title in titles:
-                windows = gw.getWindowsWithTitle(title)
-                for w in windows:
-                    if w.visible and w.width > 400 and w.height > 300:
-                        self._window = w
-                        Logger.info(
-                            f"[Action] Found window: '{w.title}' "
-                            f"({w.width}x{w.height} at {w.left},{w.top})"
-                        )
-                        return True
+            # 尝试多个可能的窗口标题 (完整匹配，避免误识别)
+            # 雀魂窗口标题特征: "雀魂" / "Mahjong Soul" / "雀魂麻将" / "Majsoul"
+            all_windows = gw.getAllWindows()
+            candidates = []
+
+            for w in all_windows:
+                try:
+                    title = w.title or ""
+                except Exception:
+                    continue
+
+                # 严格匹配: 窗口标题必须包含雀魂关键词
+                # Steam 版可能的标题: "MahjongSoul", "雀魂", "Mahjong Soul"
+                # 网页版: "雀魂 - Google Chrome", "Mahjong Soul - Chrome"
+                is_game = any(kw in title for kw in [
+                    "雀魂", "MahjongSoul", "Mahjong Soul",
+                    "mahjongsoul", "mahjong_soul", "Jansou",
+                ])
+                # "Majsoul" 太宽泛 (会匹配到开发工具), 仅在明确排除后才用
+                if not is_game and "Majsoul" in title:
+                    is_game = True
+
+                if not is_game:
+                    continue
+
+                # 过滤掉开发工具窗口
+                skip_kw = [
+                    "Visual Studio", "Code", "Terminal", "终端",
+                    "PowerShell", "cmd", "Claude", "Cursor",
+                    "Sublime", "Notepad", "记事本", "AutoMod",
+                    "修复", "MOD", "mod", "build", "Python",
+                ]
+                if any(kw in title for kw in skip_kw):
+                    continue
+
+                if w.visible and w.width > 600 and w.height > 400:
+                    candidates.append((w.width * w.height, w))
+
+            if candidates:
+                # 选择最大的匹配窗口 (游戏窗口通常很大)
+                candidates.sort(key=lambda x: -x[0])
+                self._window = candidates[0][1]
+                w = self._window
+                Logger.info(
+                    f"[Action] Found window: '{w.title}' "
+                    f"({w.width}x{w.height} at {w.left},{w.top})"
+                )
+                return True
         except Exception:
             pass
 

@@ -50,6 +50,11 @@ class GameEvent(str, Enum):
     TOGGLE_AUTO   = "control:toggle"
     KILL_SWITCH   = "control:kill"
 
+    # WebSocket 连接状态
+    WS_CONNECTED    = "ws:connected"
+    WS_DISCONNECTED = "ws:disconnected"
+    WS_RECONNECTED  = "ws:reconnected"
+
 
 Handler = Callable[[GameEvent, Dict[str, Any]], None]
 

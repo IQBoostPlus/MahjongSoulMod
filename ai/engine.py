@@ -625,15 +625,23 @@ class AIDecisionMaker:
         return False
 
     def _should_kan(self, state: GameState, tile: int, hand: List[int]) -> bool:
-        """判断是否杠"""
-        if hand.count(tile) < 4:
+        """
+        判断是否杠
+
+        注意: decide_call("kan") 处理的是对手舍牌时的 明杠 判断:
+          玩家手中有3张相同牌 + 对手打出的第4张 → 明杠
+        加杠 (已有碰 + 摸到第4张) 由 decide_discard 流程处理
+        暗杠 (手中4张) 由 decide_discard 流程触发
+        """
+        # 明杠需要手中有3张 (第4张来自对手)
+        if hand.count(tile) < 3:
             return False
 
-        # 杠会减少手牌灵活性，仅在安全时杠
-        if self.params.risk_tolerance < 0.3:
+        # 杠会减少手牌灵活性，仅在适当时杠
+        if self.params.risk_tolerance < 0.2:
             return False
 
-        # 听牌时不杠 (除非是暗杠)
+        # 听牌时不杠
         before = cached_shanten(hand)
         if before == -1:
             return False

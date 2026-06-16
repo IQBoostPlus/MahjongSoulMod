@@ -38,9 +38,18 @@ class Config:
             "proxy_port": 8080,
             "proxy_host": "127.0.0.1",
             "mitm_web_port": 8081,
+            "dashboard_port": 8082,   # 仪表盘 Web UI 端口
 
-            # ── 游戏窗口 ──
+            # ── 平台模式 ──
+            "platform": "desktop",  # "desktop" / "mobile"
+            "adb_device_id": None,  # ADB 设备ID (None=自动选择)
+
+            # ── 游戏窗口 (桌面端) ──
+            "auto_launch_browser": True,  # 启动时自动打开雀魂网页
+            "game_url": "https://game.mahjongsoul.com",
             "browser_type": "chrome",  # chrome / edge / steam
+            "steam_uri": "steam://rungameid/2739990",  # 雀魂 Steam App ID
+            "steam_app_id": "2739990",
             "window_title": "雀魂",
 
             # ── AI 策略 ──
@@ -57,6 +66,15 @@ class Config:
             "max_delay_ms": 1500,
             "safety_mode": True,     # 安全模式 (更拟人化)
             "error_rate": 0.02,      # 等优选项时犯错概率
+
+            # ── Vision Pipeline (视觉识别) ──
+            "vision_mode": True,
+            "vision_capture_backend": "auto",  # "auto" | "dxcam" | "pil" | "adb"
+            "vision_target_fps": 10,
+            "vision_tile_threshold": 0.80,     # 模板匹配置信度阈值
+            "vision_verify_actions": True,     # 启用 Plan→Execute→Verify 闭环
+            "vision_max_retries": 3,           # 动作重试次数
+            "vision_debug_overlay": False,     # 显示识别叠加窗口 (调试)
 
             # ── 快捷键 ──
             "toggle_key": "F6",

@@ -68,6 +68,7 @@ class GameState:
     # ── 最后动作 ──
     last_action: str = ""
     last_discard: int = -1       # 上家打出的最后一张牌
+    last_discard_seat: int = -1  # 最后一张牌的出牌者座位
 
     # ── 对局生命周期 ──
     in_game: bool = False
@@ -180,7 +181,10 @@ class GameTracker:
                 if 0 <= tile < 37:
                     self.state.seen_tiles[tile] += 1
                 Logger.info(f"Draw: {tile_to_str(tile)} → {', '.join(tile_to_str(t) for t in self.state.players[seat].hand)}")
+            # 关键: 设置 last_action，触发 context.py 中的 AI 出牌决策
+            self.state.last_action = "draw"
 
+        self.state.last_discard = -1
         self.state.left_tiles = data.get("left_count", self.state.left_tiles - 1)
 
     def _on_discard_tile(self, data: dict):
@@ -205,6 +209,7 @@ class GameTracker:
             self.state.players[seat].is_liqi = True
 
         self.state.last_discard = tile
+        self.state.last_discard_seat = seat
         self.state.last_action = "discard"
 
         Logger.info(f"Discard[{seat}]: {tile_to_str(tile)} " +

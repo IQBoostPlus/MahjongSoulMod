@@ -20,22 +20,39 @@ def _ensure_utf8_stdout():
     """确保 stdout 使用 UTF-8 编码 (修复 Windows GBK 乱码)"""
     if sys.platform != "win32":
         return
+
+    # 设置控制台代码页
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+    except Exception:
+        pass
+
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except Exception:
                 pass
-    if sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+
+
+class _SafeFormatter(logging.Formatter):
+    """安全的 Formatter: 当控制台不支持 UTF-8 时，用 ASCII 替代"""
+
+    def __init__(self, fmt, datefmt):
+        super().__init__(fmt, datefmt)
+        self._has_warned = False
+
+    def format(self, record):
+        s = super().format(record)
         try:
-            sys.stdout = io.TextIOWrapper(
-                sys.stdout.buffer, encoding="utf-8", errors="replace"
-            )
-            sys.stderr = io.TextIOWrapper(
-                sys.stderr.buffer, encoding="utf-8", errors="replace"
-            )
-        except Exception:
-            pass
+            # 测试是否能编码
+            s.encode(sys.stdout.encoding or "utf-8")
+            return s
+        except UnicodeEncodeError:
+            # fallback: ASCII + replace
+            return s.encode("ascii", errors="replace").decode("ascii")
 
 
 class _LoggerImpl:
@@ -56,16 +73,16 @@ class _LoggerImpl:
         self._logger = logging.getLogger("MajsoulAutoMod")
         self._logger.setLevel(logging.DEBUG)
 
-        # 控制台 handler (INFO 级别, UTF-8)
+        # 控制台 handler (INFO 级别, 安全编码)
         console = logging.StreamHandler(sys.stdout)
         console.setLevel(logging.INFO)
-        console.setFormatter(logging.Formatter(
+        console.setFormatter(_SafeFormatter(
             '[%(asctime)s] %(levelname)-7s %(message)s',
             datefmt='%H:%M:%S'
         ))
         self._logger.addHandler(console)
 
-        # 文件 handler (DEBUG 级别, UTF-8)
+        # 文件 handler (DEBUG 级别, 始终 UTF-8)
         log_dir = os.path.join(str(Path.home()), ".majsoul_automod", "logs")
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(

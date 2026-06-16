@@ -29,6 +29,9 @@ build/
 .vscode/
 .idea/
 
+# Debug output
+debug_output/
+
 # OS
 Thumbs.db
 .DS_Store
