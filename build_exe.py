@@ -269,8 +269,8 @@ def create_tutorial():
   Hotkeys
 ============================================================
 
-  F6  ->  Toggle auto mode (on/off)
-  F7  ->  Emergency stop
+  F8  ->  Toggle auto mode (on/off)
+  F9  ->  Emergency stop
   F8  ->  Capture hand tiles (template collection mode)
 
 ============================================================

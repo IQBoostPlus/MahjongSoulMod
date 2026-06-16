@@ -155,7 +155,7 @@ class MajsoulAutoMod:
                 Logger.info("代理目标: 127.0.0.1:8080 | 配置: proxifier_profile.ppx")
             else:
                 Logger.info("请在浏览器/系统中设置代理: 127.0.0.1:8080")
-        Logger.info("按 F6 切换自动模式 | F7 紧急停止")
+        Logger.info("按 F8 切换自动模式 | F9 紧急停止")
 
         # 自动打开雀魂网页
         self._launch_game()
@@ -479,9 +479,9 @@ class MajsoulAutoMod:
 
             def on_press(key):
                 try:
-                    if key == keyboard.Key.f6:
+                    if key == keyboard.Key.f8:
                         self._ctx.event_bus.publish(GameEvent.TOGGLE_AUTO)
-                    elif key == keyboard.Key.f7:
+                    elif key == keyboard.Key.f9:
                         self._ctx.event_bus.publish(GameEvent.KILL_SWITCH)
                 except Exception:
                     pass
@@ -489,7 +489,7 @@ class MajsoulAutoMod:
             self._keyboard_listener = keyboard.Listener(on_press=on_press)
             self._keyboard_listener.daemon = True
             self._keyboard_listener.start()
-            Logger.info("快捷键监听已启动 (F6=切换, F7=停止)")
+            Logger.info("快捷键监听已启动 (F8=切换, F9=停止)")
         except ImportError:
             Logger.warning("pynput 未安装，快捷键不可用。安装: pip install pynput")
 

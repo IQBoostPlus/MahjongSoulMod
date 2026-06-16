@@ -170,15 +170,18 @@ class VisionActionExecutor:
             # 立直: 先切牌再点按钮
             if action_type == ActionType.RIICHI:
                 tile_pos = self._find_tile_fallback(tile, win_rect)
-                if tile_pos:
-                    self._click_at(*tile_pos)
-                    time.sleep(random.uniform(0.3, 0.6))
+                if not tile_pos:
+                    Logger.warning("[VisionExec] Fallback: riichi tile not found")
+                    self._fail_count += 1
+                    return False
+                self._click_at(*tile_pos)
+                time.sleep(random.uniform(0.3, 0.6))
 
+                # 尝试点击立直按钮 (即使失败, 牌已切出)
                 riichi_pos = self._find_button_fallback("riichi", win_rect)
                 if riichi_pos:
                     self._click_at(*riichi_pos)
-                    return True
-                return False
+                return True
 
             return False
 

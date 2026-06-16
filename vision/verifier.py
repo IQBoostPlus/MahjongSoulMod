@@ -316,8 +316,9 @@ class ActionVerifier:
             meld_ok = len(after.melds[0]) > len(before.melds[0]) if after.melds else False
             return hand_ok or meld_ok
 
-        # RIICHI: 按钮消失 (立直宣言后不再有按钮)
+        # RIICHI: 手牌 -1 (先切牌), 立直按钮可能消失
         if action_type == ActionType.RIICHI:
+            hand_ok = after.hand_count <= before.hand_count - 1
             return hand_ok
 
         # RON/TSUMO: 按钮出现又消失 (对局结束)

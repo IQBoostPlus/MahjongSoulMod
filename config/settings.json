@@ -29,8 +29,8 @@
   "vision_verify_actions": true,
   "vision_max_retries": 3,
   "vision_debug_overlay": false,
-  "toggle_key": "F6",
-  "kill_switch_key": "F7",
+  "toggle_key": "F8",
+  "kill_switch_key": "F9",
   "log_level": "INFO",
   "log_to_file": true,
   "log_file": null

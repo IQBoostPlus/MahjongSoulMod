@@ -188,13 +188,22 @@ class ButtonDetector:
             if template is None:
                 return None
 
-            # Airtest 内部从屏幕截帧, 我们传入当前帧
-            pos = exists(template, screen=screen)
+            # Airtest 的 exists() 不支持 screen= 参数, 改用 match_in()
+            try:
+                pos = template.match_in(screen)
+            except AttributeError:
+                # 回退: 直接传入屏幕截图
+                import cv2
+                pos = exists(template)
+
             if pos:
                 # exists 返回 (left, top, right, bottom)
-                cx = (pos[0] + pos[2]) // 2
-                cy = (pos[1] + pos[3]) // 2
-                return (cx, cy)
+                if len(pos) == 4:
+                    cx = (pos[0] + pos[2]) // 2
+                    cy = (pos[1] + pos[3]) // 2
+                    return (cx, cy)
+                elif len(pos) == 2:
+                    return (int(pos[0]), int(pos[1]))
         except Exception as e:
             Logger.debug(f"[Buttons] Airtest match failed for '{name}': {e}")
 
@@ -210,11 +219,26 @@ class ButtonDetector:
             if template is None or screen is None:
                 return None
 
+            h_t, w_t = template.shape[:2]
+            h_s, w_s = screen.shape[:2]
+
+            # 模板不能大于目标图像
+            if h_t > h_s or w_t > w_s:
+                # 缩小模板以匹配
+                scale = min(h_s / h_t, w_s / w_t) * 0.9
+                if scale < 0.3:
+                    return None
+                new_w, new_h = int(w_t * scale), int(h_t * scale)
+                template = cv2.resize(template, (new_w, new_h))
+                h_t, w_t = template.shape[:2]
+
+            if h_t > h_s or w_t > w_s:
+                return None
+
             result = cv2.matchTemplate(screen, template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
             if max_val > 0.70:
-                h_t, w_t = template.shape[:2]
                 cx = max_loc[0] + w_t // 2
                 cy = max_loc[1] + h_t // 2
                 return (cx, cy)

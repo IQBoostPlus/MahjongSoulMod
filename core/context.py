@@ -547,12 +547,43 @@ class AppContext:
 
     def _on_toggle_auto(self, event: GameEvent, data: dict):
         self._auto_mode = not self._auto_mode
-        Logger.info(f"[Control] Auto mode: {'ON' if self._auto_mode else 'OFF'}")
+        status = "ON" if self._auto_mode else "OFF"
+        msg = f"[Control] Auto mode: {status}"
+        Logger.info(msg)
+        # 终端 + 屏幕提示
+        print(f"\n{'='*40}\n  {msg}\n{'='*40}\n")
+        self._show_toast(f"Auto {status}")
 
     def _on_kill_switch(self, event: GameEvent, data: dict):
         self._running = False
         self._auto_mode = False
-        Logger.info("[Control] KILL SWITCH — all automation stopped")
+        msg = "[Control] KILL SWITCH — all automation stopped"
+        Logger.info(msg)
+        print(f"\n{'='*40}\n  {msg}\n{'='*40}\n")
+        self._show_toast("KILL SWITCH")
+
+    @staticmethod
+    def _show_toast(msg: str):
+        """显示简短屏幕提示 (非阻塞)"""
+        try:
+            import threading
+            def _toast():
+                try:
+                    import tkinter as tk
+                    root = tk.Tk()
+                    root.overrideredirect(True)
+                    root.attributes('-topmost', True)
+                    root.geometry(f'+{root.winfo_screenwidth()//2-120}+{root.winfo_screenheight()//2-30}')
+                    lbl = tk.Label(root, text=msg, font=('Microsoft YaHei', 16, 'bold'),
+                                   fg='white', bg='#333333', padx=30, pady=10)
+                    lbl.pack()
+                    root.after(1500, root.destroy)
+                    root.mainloop()
+                except Exception:
+                    pass
+            threading.Thread(target=_toast, daemon=True).start()
+        except Exception:
+            pass
 
     def _on_any_event(self, event: GameEvent, data: dict):
         """所有事件的调试日志"""

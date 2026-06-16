@@ -35,3 +35,4 @@ debug_output/
 # OS
 Thumbs.db
 .DS_Store
+debug_output/

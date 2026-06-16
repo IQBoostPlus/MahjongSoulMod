@@ -15,6 +15,18 @@
 import struct
 from typing import Any, Dict, List, Optional, Tuple
 
+# ── 役种/按钮/房间映射 (来自 MajsoulPaipuAnalyzer) ──
+from .yaku import (  # noqa: F401 — re-export for convenience
+    YAKU_ID_TO_NAME, YAKU_FAN, YAKU_NAME_JP,
+    MAJSOUL_OPTION_TO_BUTTON, BUTTON_TO_OPTION, BUTTON_TO_NUM,
+    NAKI_TYPE_TO_STR, NAKI_STR_TO_TYPE,
+    ACTION_TYPE_TO_PROTO, BUTTON_DISPLAY_NAMES,
+    MODE_ID_TO_ROOM, ROOM_NAME_TO_LEVEL, ROOM_INIT_POINTS,
+    majsoul_to_tenhou, tenhou_to_majsoul,
+    get_yaku_name, get_yaku_fan, is_yakuman, calc_total_fan,
+    get_room_name, get_button_name,
+)
+
 # ── 牌编码工具 ──
 
 def tile_id(suit: int, value: int) -> int:

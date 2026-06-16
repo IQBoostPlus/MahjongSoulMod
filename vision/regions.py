@@ -105,33 +105,33 @@ class ROIDefinition:
     ref_height: int = 1080
     orientation: str = "landscape"  # "landscape" | "portrait"
 
-    # 手牌区域 (全屏百分比，83-94%高度)
-    hand: Rect = field(default_factory=lambda: Rect(0.08, 0.83, 0.92, 0.94))
+    # 手牌区域 (紫色标注: 11.6-82.5%W, 81.7-95.4%H)
+    hand: Rect = field(default_factory=lambda: Rect(0.116, 0.817, 0.825, 0.954))
 
     # 摸牌区域 (手牌右侧额外一张)
-    draw_tile: Rect = field(default_factory=lambda: Rect(0.88, 0.83, 0.97, 0.94))
+    draw_tile: Rect = field(default_factory=lambda: Rect(0.825, 0.817, 0.960, 0.954))
 
-    # 4 家牌河 (全屏百分比)
+    # 4 家牌河 (绿色大框内部: 18.3-82.2%W, 13.5-76.2%H)
     discards: List[Rect] = field(default_factory=lambda: [
-        Rect(0.08, 0.72, 0.92, 0.82),   # 0: 自家 (手牌上方)
-        Rect(0.82, 0.08, 0.97, 0.55),   # 1: 下家
-        Rect(0.08, 0.05, 0.92, 0.18),   # 2: 对家
-        Rect(0.03, 0.08, 0.18, 0.55),   # 3: 上家
+        Rect(0.183, 0.587, 0.822, 0.762),   # 0: 自家 (下半区)
+        Rect(0.822, 0.135, 0.960, 0.587),   # 1: 下家 (右半区)
+        Rect(0.183, 0.135, 0.822, 0.310),   # 2: 对家 (上半区)
+        Rect(0.040, 0.135, 0.183, 0.587),   # 3: 上家 (左半区)
     ])
 
     # 4 家副露区域
     melds: List[Rect] = field(default_factory=lambda: [
-        Rect(0.05, 0.76, 0.95, 0.82),   # 0: 自家
-        Rect(0.70, 0.10, 0.85, 0.50),   # 1: 下家
-        Rect(0.05, 0.18, 0.95, 0.25),   # 2: 对家
-        Rect(0.15, 0.10, 0.30, 0.50),   # 3: 上家
+        Rect(0.116, 0.840, 0.825, 0.950),   # 0: 自家
+        Rect(0.750, 0.160, 0.830, 0.560),   # 1: 下家
+        Rect(0.200, 0.160, 0.825, 0.300),   # 2: 对家
+        Rect(0.170, 0.160, 0.250, 0.560),   # 3: 上家
     ])
 
     # 宝牌指示牌区域
-    dora: Rect = field(default_factory=lambda: Rect(0.39, 0.18, 0.61, 0.28))
+    dora: Rect = field(default_factory=lambda: Rect(0.008, 0.058, 0.169, 0.163))
 
-    # 鸣牌按钮区域
-    buttons: Rect = field(default_factory=lambda: Rect(0.10, 0.74, 0.90, 0.83))
+    # 鸣牌按钮区域 (黄色标注: 28.7-87.7%W, 53.1-79.2%H)
+    buttons: Rect = field(default_factory=lambda: Rect(0.287, 0.531, 0.877, 0.792))
 
     # 信息栏 (场风/局数/供托/立直棒)
     info: Rect = field(default_factory=lambda: Rect(0.02, 0.00, 0.98, 0.06))

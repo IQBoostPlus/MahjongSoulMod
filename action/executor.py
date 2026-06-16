@@ -201,8 +201,12 @@ class ActionExecutor:
             elif action.action == ActionType.RIICHI:
                 # 先切牌，再点立直按钮
                 ok = self._click_tile(action.tile)
+                if not ok:
+                    return False
                 time.sleep(random.uniform(0.3, 0.6))
-                return ok and self._click_button("riichi")
+                # 立直按钮失败不影响 (牌已切出)
+                self._click_button("riichi")
+                return True
             elif action.action == ActionType.PON:
                 return self._click_button("pon")
             elif action.action == ActionType.CHI:

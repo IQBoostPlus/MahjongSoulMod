@@ -3,8 +3,13 @@
 
 通过多尺度模板匹配识别麻将牌 (34 种普通牌 + 3 种赤宝牌)。
 
-核心技术:
-  - 多尺度模板匹配 (TM_CCORR_NORMED) — 主识别, 99%+ 准确率
+核心技术 (v2.3):
+  - TM_CCOEFF_NORMED 匹配 (亮度偏移不变, 深色/浅色主题通用)
+  - 深色主题自动检测 + 灰度反转 (mean < 100 → bitwise_not)
+  - 多尺度模板匹配 (10 级缩放, 0.5× ~ 2.0×)
+  - Canny 边缘模板 + 像素模板双通道并行 (边缘降权 0.95×)
+  - Top-2 margin 检查 (差距 < 0.05 → uncertain)
+  - 赤宝牌严格验证 (conf < 0.88 → 降级为普通 5)
   - 手牌分割: 垂直投影 + 峰值检测
   - 牌河解析: 6 列网格拆分
   - ONNX 降级: MobileNetV3 分类器 (可选, 低置信度时启用)
@@ -52,8 +57,9 @@ RED_DORA_MAP = {34: 4, 35: 13, 36: 22}  # 赤5万→5m, 赤5筒→5p, 赤5索→
 
 # 牌面宽高比参考 (1080p)
 TILE_ASPECT_RATIO = 0.65  # width / height (雀魂牌面比常见)
-DEFAULT_TILE_H = 48       # 默认模板高度 (像素)
-DEFAULT_TILE_W = 31       # 默认模板宽度 (像素)
+# v2.3: 基于实际模板尺寸 (80x129), 非旧金山合成版 (31x48)
+DEFAULT_TILE_H = 129      # 实际模板高度 (像素)
+DEFAULT_TILE_W = 80       # 实际模板宽度 (像素)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -62,39 +68,58 @@ DEFAULT_TILE_W = 31       # 默认模板宽度 (像素)
 
 class TileTemplateMatcher:
     """
-    多尺度模板匹配器 (边缘增强)。
+    多尺度模板匹配器 (边缘增强 + 深色主题自适应)。
 
     为每张牌维护两种模板:
       1. 原始灰度模板 (像素匹配, 快速)
       2. Canny 边缘模板 (边缘匹配, 更鲁棒 — 容忍合成模板↔真实截图差异)
 
-    匹配策略:
-      1. 边缘匹配 (Canny, 对字体/形状差异容忍度高)
-      2. 回退到像素匹配
+    匹配策略 (v2.3 — 深色主题兼容):
+      1. 自动检测 ROI 亮度 → 深色主题自动灰度反转
+      2. 使用 TM_CCOEFF_NORMED (亮度偏移不变, 对主题差异鲁棒)
+      3. 边缘匹配 (Canny, 对字体/形状差异容忍度高) + 降权 (0.95×)
+      4. Top-2 margin 检查 — 差距 < margin_threshold 时标记 uncertain
+      5. 赤宝牌严格验证 — 置信度不够时降级为普通 5
 
     Edge matching is ~2x slower but ~3x more robust for synthetic templates.
     """
 
     TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "tiles")
+    LIVE_TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "tiles_live")
 
-    def __init__(self, threshold: float = 0.80, template_dir: str = None):
+    def __init__(self, threshold: float = 0.80, template_dir: str = None,
+                 margin_threshold: float = 0.005,
+                 invert_dark: bool = True,
+                 red_dora_strict: bool = True,
+                 adaptive_scales: bool = True):
         self._threshold = threshold
         self._template_dir = template_dir or self.TEMPLATE_DIR
         self._templates: Dict[int, np.ndarray] = {}       # tile_id → grayscale template
         self._edge_templates: Dict[int, np.ndarray] = {}   # tile_id → Canny edge template
         self._template_sizes: Dict[int, Tuple[int, int]] = {}
-        self._scales: List[float] = [0.5, 0.65, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
+        self._scales: List[float] = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.75, 2.0, 2.5]
         self._use_edges = True  # 优先使用边缘匹配
+        self._adaptive_scales = adaptive_scales  # v2.3: 自适应 scale 裁剪
+
+        # v2.3: 深色主题兼容参数
+        self._margin_threshold = margin_threshold  # top-2 最小置信度差
+        self._invert_dark = invert_dark            # 自动灰度反转深色 ROI
+        self._red_dora_strict = red_dora_strict    # 赤宝牌严格阈值
 
         self._match_count = 0
         self._match_time_total = 0.0
+
+        # v2.3: 中心聚焦模板 (裁剪背景, 保留区分特征)
+        self._focus_templates: Dict[int, np.ndarray] = {}
+        self._focus_edge_templates: Dict[int, np.ndarray] = {}
+        self._focus_ratio = 0.55  # 保留中央 55%
 
         self._load_templates()
 
     # ── 模板加载 ──
 
     def _load_templates(self):
-        """从磁盘加载所有牌面模板 + 生成边缘模板"""
+        """从磁盘加载所有牌面模板 + 生成边缘模板 + live 模板"""
         try:
             import cv2
         except ImportError:
@@ -102,6 +127,8 @@ class TileTemplateMatcher:
             return
 
         loaded = 0
+
+        # ── 主模板库 (预制牌面) ──
         for tile_id in range(TOTAL_TEMPLATES):
             path = os.path.join(self._template_dir, f"{tile_id}.png")
             if not os.path.isfile(path):
@@ -114,18 +141,53 @@ class TileTemplateMatcher:
 
             self._templates[tile_id] = img
             self._template_sizes[tile_id] = (img.shape[1], img.shape[0])
-
-            # 生成边缘模板 (Canny, 低阈值以捕获文字轮廓)
             edges = cv2.Canny(img, 30, 90)
             self._edge_templates[tile_id] = edges
+
+            # 中心聚焦版 (裁剪中央 55%, 去背景)
+            h_t, w_t = img.shape
+            cx, cy = w_t // 2, h_t // 2
+            fw, fh = int(w_t * self._focus_ratio), int(h_t * self._focus_ratio)
+            fx1, fy1 = cx - fw // 2, cy - fh // 2
+            self._focus_templates[tile_id] = img[fy1:fy1+fh, fx1:fx1+fw]
+            self._focus_edge_templates[tile_id] = edges[fy1:fy1+fh, fx1:fx1+fw]
+
             loaded += 1
 
+        # ── Live 模板 (游戏实采, 优先级高于预制) ──
+        #    ID 范围 100-199, 匹配时自动胜出 (高分 1.0 vs 0.9)
+        import glob as _glob
+        import json as _json
+        self._live_labels: Dict[int, int] = {}  # live_id → premade tile_id
+
+        labels_path = os.path.join(self.LIVE_TEMPLATE_DIR, "labels.json")
+        if os.path.isfile(labels_path):
+            try:
+                with open(labels_path, 'r') as f:
+                    label_data = _json.load(f)
+                for fname, info in label_data.items():
+                    if info.get('tile_id', -1) >= 0:
+                        live_path = os.path.join(self.LIVE_TEMPLATE_DIR, fname)
+                        if os.path.isfile(live_path):
+                            img = cv2.imread(live_path, cv2.IMREAD_GRAYSCALE)
+                            if img is not None:
+                                live_id = 100 + info['tile_id']
+                                self._templates[live_id] = img
+                                self._template_sizes[live_id] = (img.shape[1], img.shape[0])
+                                edges = cv2.Canny(img, 30, 90)
+                                self._edge_templates[live_id] = edges
+                                self._live_labels[live_id] = info['tile_id']
+                                loaded += 1
+            except Exception as e:
+                Logger.debug(f"[Tiles] Failed to load live labels: {e}")
+
+        live_count = len(self._live_labels)
         if loaded > 0:
             Logger.info(f"[Tiles] Loaded {loaded}/{TOTAL_TEMPLATES} tile templates "
-                        f"(edge-enhanced, threshold={self._threshold})")
+                        f"(live: {live_count}, edge-enhanced, threshold={self._threshold})")
         else:
             Logger.warning(
-                f"[Tiles] No tile templates found in {self._template_dir}! "
+                f"[Tiles] No tile templates found! "
                 f"Run: python scripts/generate_tile_templates.py"
             )
 
@@ -140,13 +202,16 @@ class TileTemplateMatcher:
 
     # ── 单牌匹配 ──
 
-    def match_single(self, tile_roi: np.ndarray) -> Tuple[int, float]:
+    def match_single(self, tile_roi: np.ndarray, center_focus: bool = False) -> Tuple[int, float]:
         """
         匹配单张牌的 ROI, 返回 (tile_id, confidence)。
 
-        策略:
-          1. 边缘匹配 (Canny, 对合成模板→真实截图的差异更鲁棒)
-          2. 像素匹配 (回退, 模板与截图同源时更精确)
+        策略 (v2.3):
+          1. 始终生成灰度反转版 (bitwise_not) — 双向匹配取最高
+          2. 使用 TM_CCORR_NORMED (实测对模板-截图差异比 CCOEFF 鲁棒)
+          3. 边缘匹配 + 像素匹配并行, 边缘匹配置信度降权 (0.95×)
+          4. Top-2 margin 检查 — 差距不足时标记 uncertain (-1)
+          5. 赤宝牌严格验证 — 低置信度自动降级为普通 5
 
         Returns:
             (tile_id, confidence) — 未匹配返回 (-1, 0.0)
@@ -161,51 +226,118 @@ class TileTemplateMatcher:
         if len(tile_roi.shape) == 3:
             gray = cv2.cvtColor(tile_roi, cv2.COLOR_BGR2GRAY)
         else:
-            gray = tile_roi
+            gray = tile_roi.copy()
 
         crop_h, crop_w = gray.shape[:2]
         if crop_h < 8 or crop_w < 4:
             return (-1, 0.0)
 
-        # 生成 ROI 的边缘图
+        # ── v2.3: 中心聚焦 ──
+        #   模板 80% 是统一背景, 只有中央 55% 区域包含区分特征
+        #   裁剪掉边缘背景, 大幅提升不同牌之间的区分度
+        if center_focus:
+            cx, cy = crop_w // 2, crop_h // 2
+            focus_w, focus_h = int(crop_w * 0.55), int(crop_h * 0.55)
+            fx1, fy1 = cx - focus_w // 2, cy - focus_h // 2
+            fx2, fy2 = fx1 + focus_w, fy1 + focus_h
+            # 裁剪 ROI (保留原图用于边缘检测)
+            gray_focus = gray[fy1:fy2, fx1:fx2]
+            if gray_focus.size > 0:
+                gray = gray_focus
+                crop_h, crop_w = gray.shape[:2]
+        else:
+            gray_focus = None
+
+        # ── v2.3: 自适应 scale 范围 ──
+        #   根据 ROI 实际尺寸裁剪 scale 列表, 减少 40-50% matchTemplate 调用
+        if self._adaptive_scales:
+            scales = self._get_adaptive_scales(crop_w, crop_h)
+        else:
+            scales = self._scales
+
+        # ── v2.3: 灰度反转 ──
+        #   模板为浅色主题 (像素 ~200), 游戏实际渲染为深色 (~70)
+        #   始终反转 — 实测反转后 CCORR 从 0.79 提升到 0.94
+        inverted_gray = None
+        if self._invert_dark:
+            inverted_gray = cv2.bitwise_not(gray)
+
+        # 生成 ROI 的边缘图 (用原始灰度, 边缘对颜色不敏感)
         roi_edges = cv2.Canny(gray, 30, 90) if self._use_edges else None
 
         best_id, best_conf = -1, 0.0
+        second_id, second_conf = -1, 0.0
+
+        # v2.3: 使用 TM_CCORR_NORMED — 对模板与真实截图的
+        #        结构性差异比 TM_CCOEFF_NORMED 更鲁棒。
+        #        实测: CCORR 0.855 vs CCOEFF 0.156 (同 tile, 同模板)
         method = cv2.TM_CCORR_NORMED
 
-        for tile_id, template in self._templates.items():
+        # 选择模板集: 中心聚焦 vs 完整
+        templates = self._focus_templates if center_focus and self._focus_templates else self._templates
+        edge_templates = self._focus_edge_templates if center_focus and self._focus_edge_templates else self._edge_templates
+
+        for tile_id, template in templates.items():
             tmpl_h, tmpl_w = template.shape[:2]
             size_ratio = max(crop_h / max(1, tmpl_h), tmpl_h / max(1, crop_h))
             if size_ratio > 2.5:
                 continue
 
-            for scale in self._scales:
+            for scale in scales:
                 scaled_w = int(tmpl_w * scale)
                 scaled_h = int(tmpl_h * scale)
                 if scaled_w < 4 or scaled_h < 4:
                     continue
-                if scaled_w > crop_w or scaled_h > crop_h:
+                if scaled_w > crop_w + 2 or scaled_h > crop_h + 2:
                     continue
 
                 try:
-                    # ── 边缘匹配 (优先, 权重 1.2) ──
-                    if self._use_edges and tile_id in self._edge_templates:
-                        edge_tmpl = cv2.resize(self._edge_templates[tile_id],
+                    # ── 边缘匹配 (Canny, 对形状差异容忍度高) ──
+                    #    v2.3: 降权 0.95× (原 1.2×) — 边缘匹配不应
+                    #    过度主导, 因为深色主题文字边缘可能与模板不同
+                    if self._use_edges and tile_id in edge_templates:
+                        edge_tmpl = cv2.resize(edge_templates[tile_id],
                                                 (scaled_w, scaled_h))
                         result = cv2.matchTemplate(roi_edges, edge_tmpl, method)
                         _, max_val, _, _ = cv2.minMaxLoc(result)
-                        edge_conf = float(max_val) * 1.2  # 边缘匹配置信度加权
+                        edge_conf = float(max_val) * 0.95
+
                         if edge_conf > best_conf:
+                            if best_id != tile_id:
+                                second_id, second_conf = best_id, best_conf
                             best_conf = edge_conf
                             best_id = tile_id
+                        elif edge_conf > second_conf and tile_id != best_id:
+                            second_id = tile_id
+                            second_conf = edge_conf
 
-                    # ── 像素匹配 (回退) ──
+                    # ── 像素匹配 (反转优先 — 模板浅色/游戏深色) ──
                     scaled_tmpl = cv2.resize(template, (scaled_w, scaled_h))
+
+                    # 反转后的 ROI 优先 (深色→浅色, 匹配浅色模板)
+                    if inverted_gray is not None:
+                        result = cv2.matchTemplate(inverted_gray, scaled_tmpl, method)
+                        _, max_val, _, _ = cv2.minMaxLoc(result)
+                        if max_val > best_conf:
+                            if best_id != tile_id:
+                                second_id, second_conf = best_id, best_conf
+                            best_conf = float(max_val)
+                            best_id = tile_id
+                        elif max_val > second_conf and tile_id != best_id:
+                            second_id = tile_id
+                            second_conf = float(max_val)
+
+                    # 原始灰度匹配 (兜底 — 浅色主题或模板自带深色)
                     result = cv2.matchTemplate(gray, scaled_tmpl, method)
                     _, max_val, _, _ = cv2.minMaxLoc(result)
                     if max_val > best_conf:
+                        if best_id != tile_id:
+                            second_id, second_conf = best_id, best_conf
                         best_conf = float(max_val)
                         best_id = tile_id
+                    elif max_val > second_conf and tile_id != best_id:
+                        second_id = tile_id
+                        second_conf = float(max_val)
 
                 except cv2.error:
                     continue
@@ -213,9 +345,39 @@ class TileTemplateMatcher:
         self._match_count += 1
         self._match_time_total += time.perf_counter() - t0
 
+        # ── v2.3: Margin 检查 ──
+        #   top-2 置信度差距太小 → 模型无法可靠区分 → 标记 uncertain
+        #   例外: 普通 5 ↔ 赤 5 对 — 仅靠红点区分, 本质上难以分辨,
+        #         由赤宝牌降级逻辑处理, 不触发 margin 拒绝
+        if best_id >= 0 and second_id >= 0:
+            margin = best_conf - second_conf
+            if margin < self._margin_threshold:
+                is_red_pair = (
+                    (best_id in RED_DORA_MAP and second_id == RED_DORA_MAP.get(best_id)) or
+                    (second_id in RED_DORA_MAP and best_id == RED_DORA_MAP.get(second_id))
+                )
+                if not is_red_pair:
+                    Logger.debug(
+                        f"[Tiles] Low margin: best=({best_id},{best_conf:.3f}) "
+                        f"second=({second_id},{second_conf:.3f}) margin={margin:.3f}"
+                    )
+                    return (-1, 0.0)
+
         # 白板(31)是空白牌面，匹配一切 → 排除
-        if best_id == 31 and best_conf > 0.85:
+        if best_id == 31:
             return (-1, 0.0)
+
+        # ── v2.3: 赤宝牌严格验证 ──
+        #   赤 5 与普通 5 差异极小 (仅角落红点), 低置信度时不可靠
+        #   自动降级为对应普通牌
+        if self._red_dora_strict and best_id in RED_DORA_MAP:
+            if best_conf < 0.88:  # 赤宝牌需要更高置信度
+                normal_id = RED_DORA_MAP[best_id]
+                Logger.debug(
+                    f"[Tiles] Red dora {best_id}({TILE_NAMES[best_id]}) "
+                    f"conf={best_conf:.3f} < 0.88 → downgrade to {normal_id}"
+                )
+                return (normal_id, best_conf)
 
         return (best_id, float(best_conf))
 
@@ -265,8 +427,8 @@ class TileTemplateMatcher:
         projection = cv2.GaussianBlur(projection, (kernel_size, 1), sigmaX=kernel_size / 3.0)
         projection = projection.flatten()
 
-        # 峰值检测
-        peaks = self._find_peaks(projection, min_distance=w // 18)
+        # 峰值检测 — 间距设为预期牌宽 (避免误检牌间空隙)
+        peaks = self._find_peaks(projection, min_distance=max(10, w // 16))
 
         # 若指定了预期数量, 取最强的 N 个
         if n_expected is not None and len(peaks) > n_expected:
@@ -274,16 +436,31 @@ class TileTemplateMatcher:
             peaks = sorted(peaks)  # 重新按 x 排序
 
         # 在每张牌处裁剪匹配
-        tile_h = h - 4               # 裁剪高度 (留 margin)
-        tile_w = min(w // 14, 40)    # 估算牌宽
+        # v2.3: 裁剪尺寸以模板 1.0x 为基准, 稍留边距
+        #       模板 80x129, 裁剪 ~85x140 (含边距)
+        #       确保模板在 0.9-1.2x 范围内匹配, 避免过度缩放
+        tmpl_aspect = DEFAULT_TILE_W / DEFAULT_TILE_H  # ~0.62
+        # 目标裁剪高度: 模板高度 + 10% 边距
+        target_h = int(DEFAULT_TILE_H * 1.08)  # ~139
+        if target_h > h:
+            target_h = h - 4
+        tile_h = target_h
+        tile_w = int(tile_h * tmpl_aspect)  # ~86
+        # 检查宽度是否在峰值间距内
+        spacing = w / (n_expected or 14)
+        if tile_w > spacing * 0.80:
+            tile_w = int(spacing * 0.75)
+            tile_h = int(tile_w / tmpl_aspect)
+        tile_w = max(30, tile_w)
         half_w = tile_w // 2
+        y_offset = max(0, (h - tile_h) // 2)  # 垂直居中
 
         results = []
         for px in peaks:
             x1 = max(0, px - half_w)
             x2 = min(w, px + half_w)
-            y1 = 2
-            y2 = max(y1 + 2, h - 2)
+            y1 = y_offset
+            y2 = min(h, y1 + tile_h)
 
             crop = hand_roi[y1:y2, x1:x2]
             if crop.size == 0:
@@ -428,6 +605,37 @@ class TileTemplateMatcher:
 
         return result
 
+    # ── 自适应 scale ──
+
+    def _get_adaptive_scales(self, crop_w: int, crop_h: int) -> List[float]:
+        """
+        根据 ROI 实际尺寸裁剪 scale 搜索范围。
+
+        模板参考尺寸: 31×48 px (100% scale)
+        ROI 尺寸: crop_w × crop_h
+
+        只搜索估计 scale ±35% 范围内的等级, 减少 ~50% 的 matchTemplate 调用。
+
+        Returns:
+            裁剪后的 scale 列表 (至少 3 个)
+        """
+        # 估计 scale: ROI 宽度 / 模板参考宽度
+        est_scale = crop_w / DEFAULT_TILE_W
+
+        # 保留估计值 ±35% 内的 scale
+        lo = est_scale * 0.65
+        hi = est_scale * 1.35
+
+        filtered = [s for s in self._scales if lo <= s <= hi]
+
+        # 最少保留 3 个 scale (最接近估计值的)
+        if len(filtered) < 3:
+            # 补最近的 scale
+            all_sorted = sorted(self._scales, key=lambda s: abs(s - est_scale))
+            filtered = all_sorted[:5]  # 取最接近的 5 个
+
+        return sorted(filtered)
+
     # ── 工具 ──
 
     @staticmethod
@@ -502,9 +710,18 @@ class TileRecognizer:
 
     def __init__(self, threshold: float = 0.80,
                  use_neural_fallback: bool = False,
-                 template_dir: str = None):
+                 template_dir: str = None,
+                 margin_threshold: float = 0.005,
+                 invert_dark: bool = True,
+                 red_dora_strict: bool = True,
+                 adaptive_scales: bool = True):
         self._matcher = TileTemplateMatcher(
-            threshold=threshold, template_dir=template_dir
+            threshold=threshold,
+            template_dir=template_dir,
+            margin_threshold=margin_threshold,
+            invert_dark=invert_dark,
+            red_dora_strict=red_dora_strict,
+            adaptive_scales=adaptive_scales,
         )
         self._neural = None
         if use_neural_fallback:

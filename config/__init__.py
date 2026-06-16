@@ -77,8 +77,8 @@ class Config:
             "vision_debug_overlay": False,     # 显示识别叠加窗口 (调试)
 
             # ── 快捷键 ──
-            "toggle_key": "F6",
-            "kill_switch_key": "F7",
+            "toggle_key": "F8",
+            "kill_switch_key": "F9",
 
             # ── 日志 ──
             "log_level": "INFO",     # DEBUG / INFO / WARNING / ERROR
