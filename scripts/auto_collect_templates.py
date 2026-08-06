@@ -30,22 +30,41 @@ import cv2
 import numpy as np
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "vision", "templates", "tiles")
-LOG_PATH = os.path.join(TEMPLATE_DIR, "collected_log.json")
+LIVE_DIR = os.path.join(os.path.dirname(__file__), "..", "vision", "templates", "tiles_live")
+LOG_PATH = os.path.join(LIVE_DIR, "labels.json")
 
 # 采集阈值: 匹配置信度低于此值 → 认为模板库中没有 → 采集
 COLLECT_THRESHOLD = 0.85
 # 已知模板 tile_id 集合
 KNOWN_TILES = set()
+# Live labels: filename → {tile_id, ...}
+LIVE_LABELS = {}
 
 
 def load_known_tiles():
-    """加载已有模板的 tile_id 列表"""
-    global KNOWN_TILES
+    """加载已有模板的 tile_id 列表 (含 premade + live)"""
+    global KNOWN_TILES, LIVE_LABELS
     KNOWN_TILES = set()
+
+    # Premade templates
     for f in os.listdir(TEMPLATE_DIR):
         if f.endswith('.png') and f.split('.')[0].isdigit():
             KNOWN_TILES.add(int(f.split('.')[0]))
-    print(f"[Init] Known templates: {sorted(KNOWN_TILES)} ({len(KNOWN_TILES)}/34)")
+
+    # Live templates
+    if os.path.isfile(LOG_PATH):
+        try:
+            with open(LOG_PATH, "r") as f:
+                LIVE_LABELS = json.load(f)
+            for info in LIVE_LABELS.values():
+                if isinstance(info, dict) and info.get('tile_id', -1) >= 0:
+                    KNOWN_TILES.add(info['tile_id'])
+        except Exception:
+            pass
+
+    live_count = len(LIVE_LABELS)
+    print(f"[Init] Known templates: premade={len([t for t in KNOWN_TILES if t < 100])}, "
+          f"live={live_count}, total unique tiles={len(KNOWN_TILES)}")
 
 
 def find_game_window():
@@ -170,46 +189,61 @@ def match_against_templates(crop):
     return best_tid, best_val
 
 
-def save_collected(crop, tile_id_guess, confidence, log_entries):
-    """保存采集到的牌面"""
+def save_collected(crop, tile_id_guess, confidence):
+    """保存采集到的牌面到 tiles_live/ + 更新 labels.json"""
+    os.makedirs(LIVE_DIR, exist_ok=True)
+
     # 用内容哈希去重
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     hh = hash(gray.tobytes())
 
     # 检查是否已采集过相似图片
-    for existing_hash, _ in log_entries:
-        if existing_hash == hh:
+    for fname, info in LIVE_LABELS.items():
+        if info.get('hash') == hh:
             return False
 
-    # 保存
-    fname = f"collected_{len(log_entries):04d}.png"
-    path = os.path.join(TEMPLATE_DIR, fname)
+    # 保存 — 用 tile_id 命名以便 TileTemplateMatcher 直接加载
+    safe_name = f"{tile_id_guess}_{len(LIVE_LABELS):04d}.png"
+    path = os.path.join(LIVE_DIR, safe_name)
 
-    # 保持适当尺寸 (高100px)
+    # 保持原始尺寸 (不缩放, 保留真实渲染质量)
     h_c, w_c = crop.shape[:2]
-    new_h = 100
-    new_w = max(8, int(w_c * new_h / h_c))
-    resized = cv2.resize(crop, (new_w, new_h))
+    if h_c > 200:
+        new_h = 129
+        new_w = max(20, int(w_c * new_h / h_c))
+        resized = cv2.resize(crop, (new_w, new_h))
+    else:
+        resized = crop
     cv2.imwrite(path, resized)
 
-    log_entries.append((hh, fname, tile_id_guess, confidence))
+    # 更新 label: 用猜测的 tile_id, 低置信度时标记为 -1 (待人工确认)
+    LIVE_LABELS[safe_name] = {
+        'tile_id': tile_id_guess if confidence >= 0.80 else -1,
+        'guessed_id': tile_id_guess,
+        'confidence': round(confidence, 4),
+        'hash': hh,
+        'collected_at': time.strftime('%Y-%m-%d %H:%M:%S'),
+    }
+
+    save_labels()
     return True
 
 
-def load_log():
-    """加载采集日志"""
+def load_labels():
+    """加载 live labels"""
+    global LIVE_LABELS
     if os.path.isfile(LOG_PATH):
         try:
             with open(LOG_PATH, "r") as f:
-                return json.load(f)
+                LIVE_LABELS = json.load(f)
         except Exception:
-            pass
-    return []  # [(hash, fname, guessed_tile_id, confidence), ...]
+            LIVE_LABELS = {}
+    return LIVE_LABELS
 
 
-def save_log(entries):
+def save_labels():
     with open(LOG_PATH, "w") as f:
-        json.dump(entries, f, indent=2)
+        json.dump(LIVE_LABELS, f, indent=2, ensure_ascii=False)
 
 
 def print_status(known_count, collected_count, last_hand, fps):
@@ -231,14 +265,16 @@ def main():
     print()
 
     load_known_tiles()
-    log_entries = load_log()
-    collected_count = len(log_entries)
+    load_labels()
+    collected_count = len(LIVE_LABELS)
 
     if collected_count > 0:
-        print(f"[Log] {collected_count} previously collected tiles in {LOG_PATH}")
+        confirmed = sum(1 for v in LIVE_LABELS.values() if v.get('tile_id', -1) >= 0)
+        print(f"[Log] {collected_count} live templates ({confirmed} confirmed) in {LIVE_DIR}")
 
     if len(KNOWN_TILES) >= 34:
         print("[Done] All 34 tile types already known — nothing to collect!")
+        print(f"  Live templates: {LIVE_DIR}/")
         return
 
     # 键盘监听 (F8)
@@ -306,32 +342,32 @@ def main():
                 if conf < COLLECT_THRESHOLD or tid < 0:
                     now = time.time()
                     if now - last_save_time > save_cooldown:
-                        if save_collected(crop, tid, conf, log_entries):
+                        if save_collected(crop, tid, conf):
                             new_collected = True
                             last_save_time = now
-                            collected_count += 1
+                            collected_count = len(LIVE_LABELS)
 
             # F8 手动触发: 采集所有当前手牌
             if f8_pressed[0]:
                 f8_pressed[0] = False
                 for crop, sx in crops:
                     tid, conf = match_against_templates(crop)
-                    if save_collected(crop, tid, conf, log_entries):
-                        collected_count += 1
+                    if save_collected(crop, tid, conf):
+                        collected_count = len(LIVE_LABELS)
                         new_collected = True
                 print(f"\n[F8] Captured current hand! Total collected: {collected_count}")
 
             # 保存日志
             if new_collected:
-                save_log(log_entries)
-                # 刷新已知模板
-                new_tiles = set()
-                for f in os.listdir(TEMPLATE_DIR):
-                    if f.endswith('.png') and f.split('.')[0].isdigit():
-                        new_tiles.add(int(f.split('.')[0]))
-                newly_added = new_tiles - KNOWN_TILES
+                save_labels()
+                # 刷新已知 tile_id
+                new_ids = set()
+                for info in LIVE_LABELS.values():
+                    if info.get('tile_id', -1) >= 0:
+                        new_ids.add(info['tile_id'])
+                newly_added = new_ids - KNOWN_TILES
                 if newly_added:
-                    print(f"\n[New] Templates added: {sorted(newly_added)}")
+                    print(f"\n[New] Tile IDs confirmed: {sorted(newly_added)}")
 
             # 每秒输出状态
             now = time.time()
@@ -350,16 +386,20 @@ def main():
             time.sleep(0.3)
 
     except KeyboardInterrupt:
-        print("\n\n[Stop] Saving log...")
+        print("\n\n[Stop] Saving labels...")
     finally:
-        save_log(log_entries)
-        print(f"[Done] Collected {collected_count} tiles total")
-        print(f"  Templates: {TEMPLATE_DIR}/collected_*.png")
-        print(f"  Log: {LOG_PATH}")
-        print(f"  Known: {sorted(KNOWN_TILES)}")
+        save_labels()
+        confirmed = sum(1 for v in LIVE_LABELS.values() if v.get('tile_id', -1) >= 0)
+        unconfirmed = len(LIVE_LABELS) - confirmed
+        print(f"[Done] Live templates: {len(LIVE_LABELS)} total ({confirmed} confirmed, {unconfirmed} unconfirmed)")
+        print(f"  Directory: {LIVE_DIR}/")
+        print(f"  Labels: {LOG_PATH}")
+        print(f"  Known tile IDs: {sorted([v['tile_id'] for v in LIVE_LABELS.values() if v.get('tile_id', -1) >= 0])}")
         print()
-        print("  下一步: 查看 collected_*.png → 按牌种重命名为 tile_id.png")
-        print("  命名规则: 0-8=1m~9m  9-17=1p~9p  18-26=1s~9s  27-33=字")
+        if unconfirmed > 0:
+            print(f"  ⚠ {unconfirmed} templates need manual confirmation — edit {LOG_PATH}")
+            print(f"     Set tile_id to correct value (0-33) for each unconfirmed entry")
+            print(f"     命名规则: 0-8=1m~9m  9-17=1p~9p  18-26=1s~9s  27-33=字")
 
 
 if __name__ == "__main__":

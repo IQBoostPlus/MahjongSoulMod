@@ -1,12 +1,12 @@
 """
 牌面识别引擎
 
-通过多尺度模板匹配识别麻将牌 (34 种普通牌 + 3 种赤宝牌)。
+通过 SIFT 特征匹配 + 多尺度模板匹配识别麻将牌 (34 种普通牌 + 3 种赤宝牌)。
 
-核心技术 (v2.3):
-  - TM_CCOEFF_NORMED 匹配 (亮度偏移不变, 深色/浅色主题通用)
-  - 深色主题自动检测 + 灰度反转 (mean < 100 → bitwise_not)
-  - 多尺度模板匹配 (10 级缩放, 0.5× ~ 2.0×)
+核心技术 (v2.4):
+  - SIFT 特征匹配 (主引擎) — 亮度/对比度/主题不变, 匹配形状关键点
+  - ORB 特征匹配 (轻量降级) — CPU 友好, 实时帧率
+  - 模板匹配 (兜底) — TM_CCORR_NORMED + 灰度反转 + 多尺度
   - Canny 边缘模板 + 像素模板双通道并行 (边缘降权 0.95×)
   - Top-2 margin 检查 (差距 < 0.05 → uncertain)
   - 赤宝牌严格验证 (conf < 0.88 → 降级为普通 5)
@@ -55,6 +55,21 @@ TILE_NAMES = [
 # 赤宝牌 → 对应普通牌 ID
 RED_DORA_MAP = {34: 4, 35: 13, 36: 22}  # 赤5万→5m, 赤5筒→5p, 赤5索→5s
 
+# SIFT 特征匹配参数
+SIFT_MIN_MATCHES = 8        # 最少 good matches 才能算有效匹配
+SIFT_LOWE_RATIO = 0.75      # Lowe's ratio test 阈值
+SIFT_SCORE_CONFIDENCE = 1.0 # SIFT 结果置信度 (特征匹配不产生连续分数)
+
+
+@dataclass
+class SiftMatchResult:
+    """SIFT 特征匹配结果"""
+    tile_id: int           # 匹配的牌 ID, -1 表示未匹配
+    good_matches: int      # 通过 Lowe ratio test 的匹配数
+    total_kp: int          # ROI 中的总关键点数
+    score: float           # good_matches / min(tmpl_kp, roi_kp)
+    confidence: float      # 归一化置信度 (0-1)
+
 # 牌面宽高比参考 (1080p)
 TILE_ASPECT_RATIO = 0.65  # width / height (雀魂牌面比常见)
 # v2.3: 基于实际模板尺寸 (80x129), 非旧金山合成版 (31x48)
@@ -68,20 +83,22 @@ DEFAULT_TILE_W = 80       # 实际模板宽度 (像素)
 
 class TileTemplateMatcher:
     """
-    多尺度模板匹配器 (边缘增强 + 深色主题自适应)。
+    多策略牌面匹配器 (SIFT 特征 + 边缘模板 + 深色主题自适应)。
 
-    为每张牌维护两种模板:
+    为每张牌维护多种表示:
       1. 原始灰度模板 (像素匹配, 快速)
       2. Canny 边缘模板 (边缘匹配, 更鲁棒 — 容忍合成模板↔真实截图差异)
+      3. SIFT 关键点 + 描述符 (特征匹配, 亮度/对比度/主题不变)
 
-    匹配策略 (v2.3 — 深色主题兼容):
-      1. 自动检测 ROI 亮度 → 深色主题自动灰度反转
-      2. 使用 TM_CCOEFF_NORMED (亮度偏移不变, 对主题差异鲁棒)
-      3. 边缘匹配 (Canny, 对字体/形状差异容忍度高) + 降权 (0.95×)
+    匹配策略 (v2.4 — SIFT 主引擎):
+      1. SIFT 特征匹配 (主) — 匹配形状关键点, 对深色/浅色主题不变
+      2. ORB 特征匹配 (轻量降级) — CPU 友好, 实时帧率下使用
+      3. 模板匹配 (兜底) — CCORR_NORMED + 灰度反转 + 多尺度
       4. Top-2 margin 检查 — 差距 < margin_threshold 时标记 uncertain
       5. 赤宝牌严格验证 — 置信度不够时降级为普通 5
 
-    Edge matching is ~2x slower but ~3x more robust for synthetic templates.
+    SIFT is ~2-3x slower than template matching but invariant to rendering
+    differences (synthetic templates vs real game screenshots).
     """
 
     TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates", "tiles")
@@ -91,7 +108,9 @@ class TileTemplateMatcher:
                  margin_threshold: float = 0.005,
                  invert_dark: bool = True,
                  red_dora_strict: bool = True,
-                 adaptive_scales: bool = True):
+                 adaptive_scales: bool = True,
+                 use_sift: bool = True,
+                 use_orb_fallback: bool = True):
         self._threshold = threshold
         self._template_dir = template_dir or self.TEMPLATE_DIR
         self._templates: Dict[int, np.ndarray] = {}       # tile_id → grayscale template
@@ -114,7 +133,63 @@ class TileTemplateMatcher:
         self._focus_edge_templates: Dict[int, np.ndarray] = {}
         self._focus_ratio = 0.55  # 保留中央 55%
 
+        # v2.4: SIFT 特征匹配
+        self._use_sift = use_sift
+        self._use_orb_fallback = use_orb_fallback
+        self._sift = None           # cv2.SIFT_create()
+        self._orb = None            # cv2.ORB_create() — 轻量降级
+        self._sift_kp: Dict[int, tuple] = {}     # tile_id → (keypoints, descriptors)
+        self._sift_edge_kp: Dict[int, tuple] = {} # tile_id → (keypoints, descriptors) on Canny edges
+        self._orb_kp: Dict[int, tuple] = {}      # tile_id → (keypoints, descriptors)
+        self._flann = None          # FLANN matcher for SIFT
+        self._bf_matcher = None     # Brute-Force matcher for ORB
+        self._sift_match_count = 0  # SIFT 匹配成功次数
+        self._sift_fallback_count = 0  # SIFT 失败降级次数
+        self._init_feature_detectors()
+
         self._load_templates()
+
+    def _init_feature_detectors(self):
+        """初始化 SIFT/ORB 特征检测器和匹配器"""
+        if not self._use_sift:
+            return
+        try:
+            import cv2
+        except ImportError:
+            self._use_sift = False
+            return
+
+        try:
+            self._sift = cv2.SIFT_create(
+                nfeatures=0,            # 保留所有特征
+                nOctaveLayers=3,
+                contrastThreshold=0.04,
+                edgeThreshold=10,
+                sigma=1.6,
+            )
+            # FLANN 参数 (适用于 SIFT float descriptors)
+            index_params = dict(algorithm=1, trees=5)   # KD-tree
+            search_params = dict(checks=50)
+            self._flann = cv2.FlannBasedMatcher(index_params, search_params)
+            Logger.debug("[Tiles] SIFT feature detector initialized")
+        except Exception as e:
+            Logger.debug(f"[Tiles] SIFT init failed: {e}")
+            self._sift = None
+            self._flann = None
+
+        # ORB 作为轻量降级
+        if self._use_orb_fallback:
+            try:
+                self._orb = cv2.ORB_create(
+                    nfeatures=500,
+                    scaleFactor=1.2,
+                    nlevels=8,
+                )
+                self._bf_matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
+                Logger.debug("[Tiles] ORB fallback detector initialized")
+            except Exception as e:
+                Logger.debug(f"[Tiles] ORB init failed: {e}")
+                self._orb = None
 
     # ── 模板加载 ──
 
@@ -152,6 +227,22 @@ class TileTemplateMatcher:
             self._focus_templates[tile_id] = img[fy1:fy1+fh, fx1:fx1+fw]
             self._focus_edge_templates[tile_id] = edges[fy1:fy1+fh, fx1:fx1+fw]
 
+            # v2.4: SIFT 关键点 + 描述符 (预计算, 亮度/对比度不变)
+            if self._sift is not None:
+                kp, desc = self._sift.detectAndCompute(img, None)
+                if desc is not None and len(kp) >= 4:
+                    self._sift_kp[tile_id] = (kp, desc)
+                # 边缘图 SIFT (Canny edges — 颜色反转不变)
+                kp_e, desc_e = self._sift.detectAndCompute(edges, None)
+                if desc_e is not None and len(kp_e) >= 4:
+                    self._sift_edge_kp[tile_id] = (kp_e, desc_e)
+
+            # v2.4: ORB 关键点 + 描述符 (轻量降级)
+            if self._orb is not None:
+                kp, desc = self._orb.detectAndCompute(img, None)
+                if desc is not None and len(kp) >= 4:
+                    self._orb_kp[tile_id] = (kp, desc)
+
             loaded += 1
 
         # ── Live 模板 (游戏实采, 优先级高于预制) ──
@@ -176,15 +267,30 @@ class TileTemplateMatcher:
                                 self._template_sizes[live_id] = (img.shape[1], img.shape[0])
                                 edges = cv2.Canny(img, 30, 90)
                                 self._edge_templates[live_id] = edges
+                                # v2.4: SIFT/ORB for live templates
+                                if self._sift is not None:
+                                    kp, desc = self._sift.detectAndCompute(img, None)
+                                    if desc is not None and len(kp) >= 4:
+                                        self._sift_kp[live_id] = (kp, desc)
+                                    kp_e, desc_e = self._sift.detectAndCompute(edges, None)
+                                    if desc_e is not None and len(kp_e) >= 4:
+                                        self._sift_edge_kp[live_id] = (kp_e, desc_e)
+                                if self._orb is not None:
+                                    kp, desc = self._orb.detectAndCompute(img, None)
+                                    if desc is not None and len(kp) >= 4:
+                                        self._orb_kp[live_id] = (kp, desc)
                                 self._live_labels[live_id] = info['tile_id']
                                 loaded += 1
             except Exception as e:
                 Logger.debug(f"[Tiles] Failed to load live labels: {e}")
 
         live_count = len(self._live_labels)
+        sift_count = len(self._sift_kp)
+        orb_count = len(self._orb_kp)
         if loaded > 0:
             Logger.info(f"[Tiles] Loaded {loaded}/{TOTAL_TEMPLATES} tile templates "
-                        f"(live: {live_count}, edge-enhanced, threshold={self._threshold})")
+                        f"(live: {live_count}, SIFT: {sift_count}, ORB: {orb_count}, "
+                        f"threshold={self._threshold})")
         else:
             Logger.warning(
                 f"[Tiles] No tile templates found! "
@@ -200,16 +306,246 @@ class TileTemplateMatcher:
     def match_count(self) -> int:
         return self._match_count
 
+    @property
+    def sift_match_count(self) -> int:
+        """SIFT 成功匹配次数"""
+        return self._sift_match_count
+
+    @property
+    def sift_fallback_count(self) -> int:
+        """SIFT 失败降级到模板匹配的次数"""
+        return self._sift_fallback_count
+
+    @property
+    def sift_ready(self) -> bool:
+        """SIFT 是否可用 (检测器 + 模板描述符都已就绪)"""
+        return self._sift is not None and self._flann is not None and len(self._sift_kp) >= 34
+
+    # ── v2.4: SIFT 特征匹配 ──
+
+    def _match_sift(self, tile_roi: np.ndarray) -> SiftMatchResult:
+        """
+        SIFT 特征匹配 — 匹配形状关键点, 对亮度/对比度/主题不变。
+
+        算法:
+          1. 在 ROI 中检测 SIFT 关键点 + 计算描述符
+          2. 先尝试直接匹配 (同主题: 浅→浅 或 深→深)
+          3. 若失败, 在 Canny 边缘图上匹配 (跨主题: 浅↔深)
+             Canny 边缘对颜色反转不变 — 边界就是边界
+          4. 得分 = good_matches / roi_kp_count (固定分母)
+          5. 返回得分最高的模板
+
+        这是 v2.4 的主匹配引擎 — 解决了模板匹配在深色/浅色
+        主题间完全失效的问题 (合成模板 vs 真实游戏渲染)。
+
+        Returns:
+            SiftMatchResult — tile_id=-1 表示未匹配
+        """
+        try:
+            import cv2
+        except ImportError:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        if not self.sift_ready or tile_roi is None or tile_roi.size == 0:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        # 转灰度
+        if len(tile_roi.shape) == 3:
+            gray = cv2.cvtColor(tile_roi, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = tile_roi.copy()
+
+        h, w = gray.shape[:2]
+        if h < 20 or w < 10:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        # 检测 ROI 关键点 (原始 + Canny 边缘)
+        roi_kp, roi_desc = self._sift.detectAndCompute(gray, None)
+        roi_edges = cv2.Canny(gray, 30, 90)
+        roi_edge_kp, roi_edge_desc = self._sift.detectAndCompute(roi_edges, None)
+
+        # ═══════════════════════════════════════════════════
+        # 第一阶段: 原始图像 SIFT 匹配 (同主题)
+        # 浅色模板 + 浅色游戏 → 直接匹配, 高分
+        # ═══════════════════════════════════════════════════
+        if roi_desc is not None and len(roi_kp) >= 4:
+            result = self._sift_match_internal(
+                roi_desc, len(roi_kp), self._sift_kp
+            )
+            if result.tile_id >= 0:
+                return result
+
+        # ═══════════════════════════════════════════════════
+        # 第二阶段: Canny 边缘 SIFT 匹配 (跨主题)
+        # 浅色模板 → 深色游戏 (或反之)
+        # Canny 边缘对颜色反转完全不变, 50/50 matches
+        # ═══════════════════════════════════════════════════
+        if roi_edge_desc is not None and len(roi_edge_kp) >= 4:
+            result = self._sift_match_internal(
+                roi_edge_desc, len(roi_edge_kp), self._sift_edge_kp
+            )
+            if result.tile_id >= 0:
+                return result
+
+        return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+    def _sift_match_internal(self, roi_desc, roi_kp_count,
+                              template_kp_dict) -> SiftMatchResult:
+        """
+        SIFT 匹配核心 — 给定 ROI 描述符和模板字典, 返回最佳匹配。
+
+        与 _match_sift 分离以便复用 (原始 + 边缘两种通道)。
+        """
+        if roi_desc is None or roi_kp_count < 4:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        best_id, best_score, best_matches = -1, 0.0, 0
+        second_id, second_score = -1, 0.0
+
+        for tile_id, (tmpl_kp, tmpl_desc) in template_kp_dict.items():
+            # 跳过白板 (几乎无特征) 和特征过少的模板
+            if tile_id == 31 or len(tmpl_kp) < 8:
+                continue
+
+            try:
+                # FLANN 匹配 (k=2 for Lowe's ratio test)
+                matches = self._flann.knnMatch(roi_desc, tmpl_desc, k=2)
+
+                # Lowe's ratio test
+                good = []
+                for match_pair in matches:
+                    if len(match_pair) == 2:
+                        m, n = match_pair
+                        if m.distance < SIFT_LOWE_RATIO * n.distance:
+                            good.append(m)
+
+                good_count = len(good)
+                if good_count < SIFT_MIN_MATCHES:
+                    continue
+
+                # 得分: good_matches / roi_kp_count
+                # 使用固定分母 (ROI 特征数), 避免小模板偏置
+                score = good_count / roi_kp_count
+
+                if score > best_score:
+                    second_id, second_score = best_id, best_score
+                    best_score = score
+                    best_id = tile_id
+                    best_matches = good_count
+                elif score > second_score and tile_id != best_id:
+                    second_id = tile_id
+                    second_score = score
+
+            except cv2.error:
+                continue
+
+        # Confidence: cap at 1.0
+        confidence = min(1.0, best_score)
+
+        # Margin check: 只在低分区域检查 (高分时 margin 不重要)
+        if best_id >= 0 and second_id >= 0:
+            margin = best_score - second_score
+            if best_score < 0.80 and margin < 0.03:
+                Logger.debug(
+                    f"[Tiles:SIFT] Low margin: best=({best_id},{best_score:.3f}) "
+                    f"second=({second_id},{second_score:.3f}) margin={margin:.3f}"
+                )
+                return SiftMatchResult(-1, best_matches, roi_kp_count, best_score, 0.0)
+
+        return SiftMatchResult(best_id, best_matches, roi_kp_count, best_score, confidence)
+
+    # ── v2.4: ORB 特征匹配 (轻量降级) ──
+
+    def _match_orb(self, tile_roi: np.ndarray) -> SiftMatchResult:
+        """
+        ORB 特征匹配 — CPU 友好的轻量降级。
+
+        使用 ORB (binary descriptors) + Brute-Force Hamming distance。
+        精度低于 SIFT 但速度快 ~3-5x, 适合实时帧率场景。
+
+        Returns:
+            SiftMatchResult — tile_id=-1 表示未匹配
+        """
+        try:
+            import cv2
+        except ImportError:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        if self._orb is None or not self._orb_kp:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        if tile_roi is None or tile_roi.size == 0:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        if len(tile_roi.shape) == 3:
+            gray = cv2.cvtColor(tile_roi, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = tile_roi.copy()
+
+        h, w = gray.shape[:2]
+        if h < 20 or w < 10:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        roi_kp, roi_desc = self._orb.detectAndCompute(gray, None)
+        if roi_desc is None or len(roi_kp) < 4:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+        roi_kp_count = len(roi_kp)
+        best_id, best_score, best_matches = -1, 0.0, 0
+        second_id, second_score = -1, 0.0
+
+        for tile_id, (tmpl_kp, tmpl_desc) in self._orb_kp.items():
+            # 跳过白板和特征过少的模板
+            if tile_id == 31 or len(tmpl_kp) < 8:
+                continue
+
+            try:
+                matches = self._bf_matcher.knnMatch(roi_desc, tmpl_desc, k=2)
+                good = []
+                for match_pair in matches:
+                    if len(match_pair) == 2:
+                        m, n = match_pair
+                        if m.distance < 0.75 * n.distance:
+                            good.append(m)
+
+                good_count = len(good)
+                if good_count < SIFT_MIN_MATCHES:
+                    continue
+
+                # 使用固定分母 (ROI 特征数), 避免小模板偏置
+                score = good_count / roi_kp_count
+
+                if score > best_score:
+                    second_id, second_score = best_id, best_score
+                    best_score = score
+                    best_id = tile_id
+                    best_matches = good_count
+                elif score > second_score and tile_id != best_id:
+                    second_id = tile_id
+                    second_score = score
+
+            except cv2.error:
+                continue
+
+        confidence = min(1.0, best_score)
+
+        if best_id >= 0 and second_id >= 0:
+            margin = best_score - second_score
+            if best_score < 0.80 and margin < 0.03:
+                return SiftMatchResult(-1, best_matches, roi_kp_count, best_score, 0.0)
+
+        return SiftMatchResult(best_id, best_matches, roi_kp_count, best_score, confidence)
+
     # ── 单牌匹配 ──
 
     def match_single(self, tile_roi: np.ndarray, center_focus: bool = False) -> Tuple[int, float]:
         """
         匹配单张牌的 ROI, 返回 (tile_id, confidence)。
 
-        策略 (v2.3):
-          1. 始终生成灰度反转版 (bitwise_not) — 双向匹配取最高
-          2. 使用 TM_CCORR_NORMED (实测对模板-截图差异比 CCOEFF 鲁棒)
-          3. 边缘匹配 + 像素匹配并行, 边缘匹配置信度降权 (0.95×)
+        策略 (v2.4 — SIFT 主引擎):
+          1. SIFT 特征匹配 (主) — 形状关键点, 对深色/浅色主题不变
+          2. ORB 特征匹配 (轻量降级) — SIFT 不可用时启用
+          3. 模板匹配 (兜底) — CCORR_NORMED + 灰度反转 + 多尺度
           4. Top-2 margin 检查 — 差距不足时标记 uncertain (-1)
           5. 赤宝牌严格验证 — 低置信度自动降级为普通 5
 
@@ -232,9 +568,88 @@ class TileTemplateMatcher:
         if crop_h < 8 or crop_w < 4:
             return (-1, 0.0)
 
-        # ── v2.3: 中心聚焦 ──
-        #   模板 80% 是统一背景, 只有中央 55% 区域包含区分特征
-        #   裁剪掉边缘背景, 大幅提升不同牌之间的区分度
+        # ═══════════════════════════════════════════════════════
+        # v2.4: CLAHE 对比度增强
+        #
+        # 真实游戏截图的牌面对比度很低 (std ~21 vs 模板 std ~58),
+        # 因为游戏引擎应用了主题着色、抗锯齿和缩放。
+        # CLAHE 自适应直方图均衡化 — 局部增强对比度, 保留边缘。
+        # 对比度提升: std 21→29, mean 132→191 (接近模板水平)
+        # ═══════════════════════════════════════════════════════
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)
+
+        # ═══════════════════════════════════════════════════════
+        # v2.4: SIFT 特征匹配 (主引擎)
+        #
+        # SIFT 匹配形状关键点 — 对亮度/对比度/主题不变。
+        # 模板来自游戏资产 (majsoul-generator 渲染), 与游戏内
+        # 实际渲染存在主题差异 (浅色 vs 深色)。SIFT 通过匹配
+        # 字符笔画的形状特征来跨越这一差异。
+        # SIFT 成功时直接返回 (skip 昂贵的模板匹配)。
+        # SIFT 失败时 fall through 到模板匹配。
+        # ═══════════════════════════════════════════════════════
+        if self._use_sift and self.sift_ready:
+            sift_result = self._match_sift(tile_roi)
+            if sift_result.tile_id >= 0 and sift_result.confidence > 0.15:
+                self._sift_match_count += 1
+                tile_id = sift_result.tile_id
+                conf = sift_result.confidence
+
+                Logger.debug(
+                    f"[Tiles:SIFT] Matched tile {tile_id} ({tile_to_name(tile_id)}) "
+                    f"score={sift_result.score:.3f} good_matches={sift_result.good_matches}/{sift_result.total_kp}"
+                )
+
+                # 白板排除 (在 SIFT 通道也检查)
+                if tile_id == 31:
+                    return (-1, 0.0)
+
+                # 赤宝牌严格验证
+                if self._red_dora_strict and tile_id in RED_DORA_MAP:
+                    if conf < 0.88:
+                        normal_id = RED_DORA_MAP[tile_id]
+                        Logger.debug(
+                            f"[Tiles:SIFT] Red dora {tile_id}({TILE_NAMES[tile_id]}) "
+                            f"conf={conf:.3f} → downgrade to {normal_id}"
+                        )
+                        return (normal_id, conf)
+
+                self._match_count += 1
+                self._match_time_total += time.perf_counter() - t0
+                return (tile_id, conf)
+            else:
+                self._sift_fallback_count += 1
+
+            # ORB 降级 (SIFT 失败时尝试)
+            if self._use_orb_fallback and self._orb is not None:
+                orb_result = self._match_orb(tile_roi)
+                if orb_result.tile_id >= 0 and orb_result.confidence > 0.15:
+                    self._sift_match_count += 1
+                    tile_id = orb_result.tile_id
+                    conf = orb_result.confidence
+
+                    Logger.debug(
+                        f"[Tiles:ORB] Matched tile {tile_id} ({tile_to_name(tile_id)}) "
+                        f"score={orb_result.score:.3f} good_matches={orb_result.good_matches}/{orb_result.total_kp}"
+                    )
+
+                    if tile_id == 31:
+                        return (-1, 0.0)
+
+                    if self._red_dora_strict and tile_id in RED_DORA_MAP:
+                        if conf < 0.88:
+                            normal_id = RED_DORA_MAP[tile_id]
+                            return (normal_id, conf)
+
+                    self._match_count += 1
+                    self._match_time_total += time.perf_counter() - t0
+                    return (tile_id, conf)
+
+        # ═══════════════════════════════════════════════════════
+        # v2.3: 模板匹配 (兜底)
+        # SIFT/ORB 不可用或失败时 → 回退到传统模板匹配
+        # ═══════════════════════════════════════════════════════
         if center_focus:
             cx, cy = crop_w // 2, crop_h // 2
             focus_w, focus_h = int(crop_w * 0.55), int(crop_h * 0.55)

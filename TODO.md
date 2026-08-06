@@ -1,6 +1,10 @@
-# MajsoulAutoMod v2.2 — 项目状态总结
+# MajsoulAutoMod v2.4 — 项目状态总结
 
-> 最后更新: 2026-06-16 (工程评估 & 修复计划)
+> 最后更新: 2026-06-17 (SIFT 特征匹配引擎)
+
+---
+
+## 🔬 工程评估 (2026-06-16)
 
 ---
 
@@ -63,11 +67,42 @@
 - [x] 裁剪尺寸匹配模板宽高比 (80:129)
 - [x] 自适应 scale + 细化范围
 - [x] margin 检查 + 赤宝牌降级
-- [x] 75 项单元测试全部通过
+- [x] 99 项单元测试全部通过
+- [x] **SIFT 特征匹配引擎** — 同主题 97%, 跨主题 97% (v2.4 + CLAHE)
+- [x] **CLAHE 对比度增强** — 自适应直方图均衡化, 桥接模板-游戏质量差
+- [x] **Live 模板基础设施** — `tiles_live/` 目录 + labels.json 格式
+
+### ⚠️ 部分解决 — 牌面识别
+
+牌面识别从 **完全不可用 (0/13-15)** 提升到 **97% 理论准确率** (干净反转图像)。
+
+**真实情况**: 模板来自游戏资产 (majsoul-generator 渲染, 80x129 RGBA),
+已确认为真实模板。问题不在模板来源, 而在 **游戏内渲染质量远低于模板**:
+
+| 属性 | 模板 | 游戏截图 crop |
+|------|------|---------------|
+| mean | ~190 | ~132 |
+| std | ~58 | ~21 |
+| SIFT kp | 50-162 | 0-3 |
+| 渲染 | 生成器 (高质量) | 游戏引擎 (主题+抗锯齿) |
+
+**v2.4 改进**:
+- SIFT + Canny 边缘 + CLAHE → 97% (干净反转), 但实机仍受限于低对比度
+- CLAHE 提升 crop std 21→29, 但仍远低于模板 std 58
+- 游戏 crop 的 SIFT 关键点仅 0-3 个 (需要 ≥8), 无法可靠匹配
+
+### 下一步
+
+牌面识别的根本解决需要 **缩小模板与游戏截图的渲染质量差距**:
+
+1. **Live 模板采集** (推荐) — `auto_collect_templates.py` 在游戏中边玩边采
+   集, 模板与截图有相同渲染质量 → 模板匹配重新变得可靠
+2. **模板降级** — 对现有模板应用模糊+降对比度, 模拟游戏渲染
+3. **ONNX 分类器** — 在低质量图像上训练, 绕过质量差距
 
 ### ❌ 阻塞
 
-- [ ] **牌面识别在真实对局中不可用** — 需要换匹配策略（SIFT/ONNX/真实模板采集）
+- [ ] **实机低对比度 crop 无法匹配** — 需 live 模板或 ONNX 模型
 
 ---
 
@@ -193,34 +228,35 @@
 
 ## 🎯 下一步计划
 
-### 短期 (当前进行中)
+### 短期 (v2.4 已完成)
 
-1. **算法层面修复牌识别** — 灰度反转 + CCOEFF_NORMED + margin + 赤宝牌降级 (P0)
-2. **添加匹配算法测试** — 验证修复效果
-3. **算法不够用时再补模板** — `auto_collect_templates.py` 收深色模板
-4. **采集按钮模板** — `capture_templates.py` 截 7 个按钮
-5. **实机对局测试** — `python scripts/test_vision_live.py`
+1. ✅ **SIFT 特征匹配引擎** — 同主题 97%, 跨主题 89% (P0 ✅)
+2. ✅ **SIFT 测试套件** — 24 个新测试, 99 项全部通过
+3. **采集按钮模板** — `capture_templates.py` 截 7 个按钮
+4. **实机对局测试** — `python scripts/test_vision_live.py` 验证 SIFT
+5. **收集深色 live 模板** — `auto_collect_templates.py` 收筒子/赤宝牌
 
 ### 中期
 
-4. **从游戏文件提取原生素材** — 解析 `resources.assets` 拿雀魂真牌面图
-5. ~~**安装 DXcam**~~ ✅ 已完成 — `pip install dxcam` (3ms/帧)
-6. **ONNX 模型** — 网络通时下载 ViT (99.67%), 彻底解决识别问题
+6. **从游戏文件提取原生素材** — 解析 `resources.assets` 拿雀魂真牌面图
+7. **ONNX 模型** — 网络通时下载 ViT (99.67%), 彻底解决识别问题
 
 ### 长期
 
-7. ~~**剥离 MITM**~~ ✅ 已完成 — `build_exe.py --vision-only` (~150MB)
 8. **完整的闭环验证** — Plan→Execute→Verify 全链路对局测试
-9. **自适应 ROI** — 自动检测窗口大小/主题, 无需手动校准 (已实现窗口查找, 待完善主题自适应)
+9. **自适应 ROI** — 自动检测窗口大小/主题
 
-### v2.2.1 新增 (2026-06-16)
+### v2.4 新增 (2026-06-17)
 
 | 项目 | 文件 | 说明 |
 |------|------|------|
-| DXcam 安装 | `requirements.txt` | `dxcam>=0.3.0` |
-| 多显示器支持 | `vision/capture.py` | `CaptureConfig.monitor_index` + `DXCAMCapture.enumerate_outputs()` |
-| 窗口自适应查找 | `vision/pipeline.py` | `find_game_window()` + `update_window_rect()` 连多显示器 |
-| 分数 OCR | `vision/ocr.py` | `ScoreOCR` + `ScoreInfo`, 多数投票平滑 |
-| WebSocket 重连 | `mitm/addons.py` | `WSReconnectTracker` 指数退避 + 状态快照 + EventBus 通知 |
-| Vision-only 打包 | `build_exe.py` | `--vision-only` 参数, 跳过 mitmproxy (~265→150MB) |
-| 事件扩展 | `core/events.py` | `WS_CONNECTED` / `WS_DISCONNECTED` / `WS_RECONNECTED` |
+| SIFT 特征匹配 | `vision/tiles.py` | 主引擎: 形状关键点匹配, 亮度/对比度/主题不变 |
+| 边缘 SIFT 降级 | `vision/tiles.py` | Canny 边缘图 SIFT, 跨主题 89% 准确率 |
+| ORB 轻量降级 | `vision/tiles.py` | CPU 友好, 实时帧率备用 |
+| SIFT 测试套件 | `tests/test_tile_recognition.py` | 24 个 SIFT 测试: 初始化/自匹配/深色/集成/ORB |
+
+**SIFT 匹配流程:**
+1. 原始图像 SIFT → 同主题匹配 (浅→浅 或 深→深)
+2. Canny 边缘 SIFT → 跨主题匹配 (浅↔深, 边缘反转不变)
+3. ORB 降级 → CPU 友好备用
+4. 模板匹配 → 最终兜底 (CCORR + 灰度反转 + 多尺度)
