@@ -70,7 +70,7 @@ class VisionEventProcessor:
 
     # ── 主接口 ──
 
-    def process_events(self, events: List["VisionEvent"]):
+    def process_events(self, events: List["VisionEvent"], frame=None):
         """
         处理一批 VisionEvent。
 
@@ -79,6 +79,8 @@ class VisionEventProcessor:
         """
         for event in events:
             try:
+                if frame is not None:
+                    self.tracker.state.available_actions = set(frame.visible_buttons)
                 self._process_one(event)
                 self._event_count += 1
             except Exception as e:
@@ -88,6 +90,10 @@ class VisionEventProcessor:
     def _process_one(self, event: "VisionEvent"):
         """处理单个事件 — 调用 GameTracker"""
         tracker = self.tracker
+        if event.event_type == 'agari_available':
+            from core.events import GameEvent
+            self.event_bus.publish(GameEvent.AGARI_AVAILABLE, **event.data)
+            return
 
         # 直接调用 — tracker.on_game_event 内部通过反射路由到 _on_{msg_name}
         # 事件类型命名与 GameTracker 内部方法名一致
@@ -168,12 +174,14 @@ class VisionEventProcessor:
                     time.sleep(interval)
                     continue
 
+                self.tracker.state.available_actions = set(frame.visible_buttons)
+
                 # 差分 → 事件
                 events = differ.diff(frame) if differ else []
 
                 # 桥接 → GameTracker
                 if events:
-                    self.process_events(events)
+                    self.process_events(events, frame)
 
             except Exception as e:
                 Logger.error(f"[VisionProc] Loop error: {e}")

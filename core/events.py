@@ -32,6 +32,7 @@ class GameEvent(str, Enum):
     RIICHI        = "game:riichi"
     TSUMO         = "game:tsumo"
     RON           = "game:ron"
+    AGARI_AVAILABLE = "game:agari_available"
 
     # 流局
     LIUJU         = "game:liuju"

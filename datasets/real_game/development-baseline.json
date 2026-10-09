@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-08T08:22:08.916637+00:00",
+  "split": "development",
+  "independent_test": false,
+  "acceptance_passed": null,
+  "manifest_sha256": "42057be118028a9313abffe6f48774b79370b5d8a67df71a96ea1120757528e1",
+  "scope": "annotated hand/button ROIs; no full-pipeline or action success claim",
+  "dataset_samples": 6,
+  "pending_samples": 5,
+  "runtime": {
+    "python": "3.12.0 (tags/v3.12.0:0fb18b0, Oct  2 2023, 13:03:39) [MSC v.1935 64 bit (AMD64)]",
+    "opencv": "4.10.0",
+    "numpy": "2.5.1"
+  },
+  "implementation_sha256": {
+    "vision/tiles.py": "2c538e299a1a98e8a4d148fae9f0390f70c6a44191f45e7c46677763a42c0f63",
+    "vision/buttons.py": "9a50888f7f2ea27c1fba51d9ecb163a05e2eed4189c376705a6f3436e5e96ca5",
+    "scripts/validate_real_dataset.py": "4124596d2d7084a43d9ed40af097974aaafc0817552847550141b5975bbc8229"
+  },
+  "template_sha256": {
+    "vision/templates/tiles/0.png": "42fa0fa5d57b3717a25e2886a488fa1a6b7c0f690eefb5de7063406808b71bfc",
+    "vision/templates/tiles/1.png": "a0974d42f6d66514d986321efacafddb02ba72f854c9fb42677478e5c1452809",
+    "vision/templates/tiles/10.png": "40dd2dfc6d6f45e2c9404ffcb6a9a82275897839751648543489acc5cb3c19c1",
+    "vision/templates/tiles/11.png": "52a6a91589a98bbcccc51b0da9d517656a0dd5abf3d033cdd22d2f7ae2f7d261",
+    "vision/templates/tiles/12.png": "b3b30346e9712069658047203e0a85ed9fd2f0a7fda467b24fc6ec06d2692847",
+    "vision/templates/tiles/13.png": "b31a9b94dfb2446c2fcab0d9f781ee70a3bdb85f2b87912a4bb158820c63cff0",
+    "vision/templates/tiles/14.png": "0159cdd2bc4fa4c6ddbad9f70d0abbc5e0dac58917f763bdfeba2becb90a054b",
+    "vision/templates/tiles/15.png": "18322095b777ffb3105658902bbd9e98b0e33199addd586756e5fdb47adf929a",
+    "vision/templates/tiles/16.png": "7c2fcbe7092008d2266a3dbc42f7a6faac812b69717d748cd894ee13044f0d00",
+    "vision/templates/tiles/17.png": "f0fc79de55194d67c5ad3c7fad0d7a91e5d5fbf54853d026d955d3592c230820",
+    "vision/templates/tiles/18.png": "04adad3c1ca45b6ab482ca7a8be01cbb4d063d9f7fdc0faa6a5ad53831b2b879",
+    "vision/templates/tiles/19.png": "cce0d6e7fdd14e68d4c77d83b509f95a79cd415f044d243d5bb68c956e710f7a",
+    "vision/templates/tiles/2.png": "4c5a0df05fac92d9a26e00df50fdf72cd4bb252694dbffe88a6ca352aa2bd5cf",
+    "vision/templates/tiles/20.png": "ce5644b8ed26536e9279668356e15c4f1e3d235e9139e6c131e1cfaf3bf54bf4",
+    "vision/templates/tiles/21.png": "7e80fb5d537fb2f78f15e0b52e451d15fb5e13d73d1760fed7e694636dea40a6",
+    "vision/templates/tiles/22.png": "56c8f6dc277972003d24519fba639e0b1807effc52db71e082f8b302b6a68264",
+    "vision/templates/tiles/23.png": "344264465b12f5c40dd73d8052eda653f7ab6dc085b099de7cf70bd373549805",
+    "vision/templates/tiles/24.png": "5bbba47b637d9771113fae33e96c483af356646e1d59d8c1f7861421d8073421",
+    "vision/templates/tiles/25.png": "572431d6d28a5c7590b8b91f00624a5e88ae0e0978707d102eb529b35c43988f",
+    "vision/templates/tiles/26.png": "626e70aee282b2fb347a0ea21c6181fb5b960517238cb2890e3dd908d47dacdb",
+    "vision/templates/tiles/27.png": "1e8466f6fa15deeecf0a765215205bf3775bfcd85feae5f0d02d1b995a62b8ae",
+    "vision/templates/tiles/28.png": "48ce8107991685d4f2228ea3606969833652d422253f398709b1776eca1ab71a",
+    "vision/templates/tiles/29.png": "04f38d343dcee02b0523abae7be15855588fd861be49771c3f86b2124624876a",
+    "vision/templates/tiles/3.png": "1fc11b42bbe13815e49b13cb76223c852f41e2a1960ee622216aae41e6ae4b15",
+    "vision/templates/tiles/30.png": "9dee3933f236c44a1de7d7f7d22dd8039747d20d580b273f6ede7c9fac4cf524",
+    "vision/templates/tiles/31.png": "58342b9d448e7342a7b8ba3305f1cb39466255381a5180c89cff5a1020b54d40",
+    "vision/templates/tiles/32.png": "955b0da01b87bec040f9efb826290e069cb2485ee470a349f9dc30b8ed107bb0",
+    "vision/templates/tiles/33.png": "21cb31b45c1595c7014f3eb44eea0f81e95e417676856cbc5f9074851ceca842",
+    "vision/templates/tiles/34.png": "2b500f53b880f7fd0a613bb86b0da1913a65cc73778954842ee6d87416048849",
+    "vision/templates/tiles/35.png": "72964b33aaf80642fa20397e406deafdc57fa0fbf926dfec45ba6e8891b35f51",
+    "vision/templates/tiles/36.png": "ea862f20bfc5203000643a3795c10f16533f8bf9348d043967e8bcaa3f7ddb46",
+    "vision/templates/tiles/4.png": "098510530138718689536b14950d9ccd90aa7fd9679908a9446957ab98cda4b4",
+    "vision/templates/tiles/5.png": "242418e7ee893b34b37608d9bcaf751e975586813cf290362200a124e590e4b0",
+    "vision/templates/tiles/6.png": "17b468d494ea3f28306220b7a3659556e08d4b2d5fde88eca6a7e65737248938",
+    "vision/templates/tiles/7.png": "a09f3deafc24301739210fa941ee23269e14c1d09eeba7bb29b97adb8c64aebb",
+    "vision/templates/tiles/8.png": "1f6518f1f92e3434b36f12fcf5cdcd943c48b69baefa978f8dc338b82f0a56c8",
+    "vision/templates/tiles/9.png": "6b422cfa4f1b987ad87e25b0a8ee62a6e3991e8c8a4a927065a03997121cecd0",
+    "templates/chi.png": "9cddacce2abfe1da0376301babe714f78ac222c24a02c45efc38ccc33566e156",
+    "templates/kan.png": "a0641121e77cff47bb4665b3fcdacdc65cdce5932b456ca05f65a04b1c931ad9",
+    "templates/pass.png": "3746c7a6947456a82cf920f0602247ffe89ebce91ffc10ceeb7d3912d6e543f4",
+    "templates/pon.png": "e2dc3e4063cc7c883adef7f795199275d5aea20b750d63b44a2a6b7ffd2553ac",
+    "templates/riichi.png": "4e67b550bfe482e351e84a69724a5680998cc6d01641d394318e025f9bf53481",
+    "templates/ron.png": "3c28fd9922c93806fbd360d8effc54f1511d6011c5cc1afcdf87d6b97c14bac1",
+    "templates/tsumo.png": "ba3b451dbea2de9d0b3286dbe57ea223f0d23d117d0bc4a9d93789cd3ecc30fc"
+  },
+  "sessions": 1,
+  "samples": 1,
+  "metrics": {
+    "counts": {
+      "hand_frames": 1,
+      "exact_hands": 0,
+      "sequence_edits": 12,
+      "sequence_slots": 13,
+      "known_tiles": 13,
+      "correct_tiles": 1,
+      "known_rejections": 7,
+      "button_frames": 1,
+      "negative_button_frames": 1,
+      "negative_button_false_positives": 0,
+      "button_tp": 0,
+      "button_fp": 0,
+      "button_fn": 0,
+      "button_tn": 7
+    },
+    "by_tile": {
+      "2": {
+        "correct": 0,
+        "total": 1
+      },
+      "5": {
+        "correct": 0,
+        "total": 1
+      },
+      "13": {
+        "correct": 0,
+        "total": 4
+      },
+      "15": {
+        "correct": 1,
+        "total": 1
+      },
+      "32": {
+        "correct": 0,
+        "total": 1
+      },
+      "19": {
+        "correct": 0,
+        "total": 3
+      },
+      "23": {
+        "correct": 0,
+        "total": 1
+      },
+      "25": {
+        "correct": 0,
+        "total": 1
+      }
+    },
+    "tile_accuracy": 0.07692307692307693,
+    "exact_hand_rate": 0.0,
+    "sequence_accuracy": 0.07692307692307687,
+    "known_tile_rejection_rate": 0.5384615384615384,
+    "button_false_positive_rate": 0.0,
+    "button_recall": null,
+    "negative_button_frame_fp_rate": 0.0,
+    "latency_ms": {
+      "p50": 849.0450999233872,
+      "p95": 849.0450999233872
+    }
+  },
+  "records": [
+    {
+      "id": "shot-a228506f51f0",
+      "session_id": "legacy-unknown-session-group",
+      "size": [
+        1920,
+        1080
+      ],
+      "theme": "cat-tile-skin",
+      "expected_hand": [
+        2,
+        5,
+        13,
+        13,
+        13,
+        13,
+        15,
+        32,
+        19,
+        19,
+        19,
+        23,
+        25
+      ],
+      "predicted_hand": [
+        -1,
+        -1,
+        35,
+        35,
+        14,
+        14,
+        15,
+        -1,
+        20,
+        -1,
+        -1,
+        -1,
+        -1
+      ],
+      "hand_confidences": [
+        0.0,
+        0.0,
+        0.9376837611198425,
+        0.9376513957977295,
+        0.5300021171569824,
+        0.9392582178115845,
+        0.936129093170166,
+        0.0,
+        0.5762436985969543,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "expected_buttons": [],
+      "predicted_buttons": [],
+      "elapsed_ms": 849.0450999233872
+    }
+  ],
+  "by_resolution": {
+    "1920x1080": {
+      "counts": {
+        "hand_frames": 1,
+        "exact_hands": 0,
+        "sequence_edits": 12,
+        "sequence_slots": 13,
+        "known_tiles": 13,
+        "correct_tiles": 1,
+        "known_rejections": 7,
+        "button_frames": 1,
+        "negative_button_frames": 1,
+        "negative_button_false_positives": 0,
+        "button_tp": 0,
+        "button_fp": 0,
+        "button_fn": 0,
+        "button_tn": 7
+      },
+      "by_tile": {
+        "2": {
+          "correct": 0,
+          "total": 1
+        },
+        "5": {
+          "correct": 0,
+          "total": 1
+        },
+        "13": {
+          "correct": 0,
+          "total": 4
+        },
+        "15": {
+          "correct": 1,
+          "total": 1
+        },
+        "32": {
+          "correct": 0,
+          "total": 1
+        },
+        "19": {
+          "correct": 0,
+          "total": 3
+        },
+        "23": {
+          "correct": 0,
+          "total": 1
+        },
+        "25": {
+          "correct": 0,
+          "total": 1
+        }
+      },
+      "tile_accuracy": 0.07692307692307693,
+      "exact_hand_rate": 0.0,
+      "sequence_accuracy": 0.07692307692307687,
+      "known_tile_rejection_rate": 0.5384615384615384,
+      "button_false_positive_rate": 0.0,
+      "button_recall": null,
+      "negative_button_frame_fp_rate": 0.0,
+      "latency_ms": {
+        "p50": 849.0450999233872,
+        "p95": 849.0450999233872
+      }
+    }
+  },
+  "by_theme": {
+    "cat-tile-skin": {
+      "counts": {
+        "hand_frames": 1,
+        "exact_hands": 0,
+        "sequence_edits": 12,
+        "sequence_slots": 13,
+        "known_tiles": 13,
+        "correct_tiles": 1,
+        "known_rejections": 7,
+        "button_frames": 1,
+        "negative_button_frames": 1,
+        "negative_button_false_positives": 0,
+        "button_tp": 0,
+        "button_fp": 0,
+        "button_fn": 0,
+        "button_tn": 7
+      },
+      "by_tile": {
+        "2": {
+          "correct": 0,
+          "total": 1
+        },
+        "5": {
+          "correct": 0,
+          "total": 1
+        },
+        "13": {
+          "correct": 0,
+          "total": 4
+        },
+        "15": {
+          "correct": 1,
+          "total": 1
+        },
+        "32": {
+          "correct": 0,
+          "total": 1
+        },
+        "19": {
+          "correct": 0,
+          "total": 3
+        },
+        "23": {
+          "correct": 0,
+          "total": 1
+        },
+        "25": {
+          "correct": 0,
+          "total": 1
+        }
+      },
+      "tile_accuracy": 0.07692307692307693,
+      "exact_hand_rate": 0.0,
+      "sequence_accuracy": 0.07692307692307687,
+      "known_tile_rejection_rate": 0.5384615384615384,
+      "button_false_positive_rate": 0.0,
+      "button_recall": null,
+      "negative_button_frame_fp_rate": 0.0,
+      "latency_ms": {
+        "p50": 849.0450999233872,
+        "p95": 849.0450999233872
+      }
+    }
+  }
+}

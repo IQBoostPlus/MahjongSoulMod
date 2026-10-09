@@ -19,6 +19,7 @@ Vision Pipeline — 视觉管线编排
 """
 
 import time
+import threading
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -64,6 +65,9 @@ class VisionFrame:
     # 手牌 (tile_id 列表, 从左到右, 含刚摸的牌)
     hand_tiles: List[int] = field(default_factory=list)
     hand_confidences: List[float] = field(default_factory=list)
+    # Absolute desktop coordinates, aligned with hand_tiles (x, y, w, h).
+    hand_boxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
+    button_positions: Dict[str, Tuple[int, int]] = field(default_factory=dict)
 
     # 牌河 (4 家, 每家是二维列表: 行×列)
     # seat 0=自家, 1=下家, 2=对家, 3=上家
@@ -86,6 +90,8 @@ class VisionFrame:
 
     # 局况
     round_info: Optional[RoundInfo] = None
+    # Set only by a confirmed round-result detector, never button visibility.
+    round_ended: bool = False
 
     # 识别质量
     hand_confidence_avg: float = 0.0
@@ -170,6 +176,7 @@ class VisionPipeline:
         self._frame_count = 0
         self._total_process_time = 0.0
         self._running = False
+        self._process_lock = threading.RLock()
 
         # 窗口矩形缓存 (通过窗口查找获取)
         self._cached_window_rect: Tuple[int, int, int, int] = (0, 0, 1920, 1080)
@@ -193,6 +200,10 @@ class VisionPipeline:
     # ── 帧处理 ──
 
     def process_frame(self) -> Optional[VisionFrame]:
+        with self._process_lock:
+            return self._process_frame()
+
+    def _process_frame(self) -> Optional[VisionFrame]:
         """
         采集并处理一帧, 返回 VisionFrame。
 
@@ -206,7 +217,7 @@ class VisionPipeline:
         # 1. 采集
         raw = self._capture.capture()
         if raw is None:
-            return self._last_frame
+            return None
 
         h, w = raw.shape[:2]
 
@@ -219,6 +230,8 @@ class VisionPipeline:
         # 全屏模式: ROI 坐标是屏幕百分比
         # 窗口模式: 裁剪到窗口区域后使用窗口内百分比 ROI
         if wx != 0 or wy != 0 or ww != w or wh != h:
+            if wx < 0 or wy < 0 or wx + ww > w or wy + wh > h:
+                return None
             # 裁剪到窗口区域
             x1, y1 = max(0, wx), max(0, wy)
             x2, y2 = min(w, wx + ww), min(h, wy + wh)
@@ -238,6 +251,10 @@ class VisionPipeline:
             hand_results = self._tiles.recognize_hand(hand_roi, n_expected=None)
             frame.hand_tiles = [tid for tid, _ in hand_results]
             frame.hand_confidences = [cf for _, cf in hand_results]
+            boxes = self._tiles.hand_boxes
+            hx, hy, _, _ = self._regions.hand.to_pixels(w, h)
+            frame.hand_boxes = [(wx + hx + x, wy + hy + y, bw, bh)
+                                for x, y, bw, bh in boxes]
             if frame.hand_confidences:
                 frame.hand_confidence_avg = sum(frame.hand_confidences) / len(frame.hand_confidences)
 
@@ -264,7 +281,12 @@ class VisionPipeline:
 
         # 按钮 (不依赖 tile 模板)
         btn_roi = self._regions.buttons.crop(raw, w, h)
-        frame.visible_buttons = self._buttons.detect_buttons(btn_roi)
+        bx, by, _, _ = self._regions.buttons.to_pixels(w, h)
+        for name in self._buttons.BUTTON_NAMES:
+            pos = self._buttons.find_button_position(name, btn_roi)
+            if pos is not None:
+                frame.button_positions[name] = (wx + bx + pos[0], wy + by + pos[1])
+        frame.visible_buttons = list(frame.button_positions)
 
         # 3. 统计
         self._frame_count += 1

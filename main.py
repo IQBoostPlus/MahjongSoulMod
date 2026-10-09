@@ -106,7 +106,7 @@ class MajsoulAutoMod:
         self._keyboard_listener = None
 
         # 根据模式创建上下文
-        if vision_mode and not listen_only:
+        if vision_mode:
             self._ctx = AppContext.create_vision()
         else:
             self._ctx = AppContext.get()

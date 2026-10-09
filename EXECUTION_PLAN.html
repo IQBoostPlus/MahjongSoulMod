@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MajsoulAutoMod v2.5 — 执行计划与验收标准</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f5f5f3;color:#202421;font:15px/1.7 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1150px;margin:auto;padding:32px 24px}header{border-bottom:2px solid #326955;padding-bottom:20px}h1{font-size:24px;margin:0 0 8px}h2{font-size:19px;margin-top:30px}p{margin:8px 0}a{color:#245e49}small,.meta{color:#58615c;font-size:13px}.summary{background:#fff;border-left:4px solid #326955;padding:14px 18px;margin:22px 0}.table-wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;min-width:780px;background:#fff;font-size:14px}th,td{padding:13px 14px;border-bottom:1px solid #d7dcd8;text-align:left;vertical-align:top}thead th{background:#e7ece8}tbody th{width:65px}td:nth-child(2){width:40%}td:nth-child(3){width:35%}.priority{font-weight:normal;font-size:12px;color:#58615c}nav{display:flex;gap:18px;flex-wrap:wrap}li{margin:7px 0}footer{margin-top:32px;border-top:1px solid #d7dcd8;padding-top:14px;font-size:13px;color:#58615c}@media print{body{background:#fff}main{padding:0}.table-wrap{overflow:visible}table{min-width:0}tr{break-inside:avoid}}
+</style>
+</head>
+<body><main>
+<header><h1>MajsoulAutoMod v2.5 — 执行计划与验收标准</h1><p class="meta">核查日期：2026-10-08 · P0 代码修正与回归完成，实机验收待进行 · 优先级 P0 → P3</p><nav aria-label="项目文档"><a href="README.md">项目 README</a><a href="TODO.MD">当前进度与证据</a><a href="docs/history/README.md">历史记录</a></nav></header>
+<div class="summary"><strong>当前结论：P0 已有代码修正及 145 项回归证据，完整真实对局尚未验收。</strong><p>按钮失败不再凭坐标判可见，动作未确认会暂停，麻将规则与副露后出牌触发已修正。下一步补独立数据及完整状态；副露、立直棒和结果画面未接入实时管线，不能宣称稳定自动对局。</p></div>
+<section aria-labelledby="evidence"><h2 id="evidence">已有证据与适用范围</h2><ul>
+<li>2026-10-08 验证工具加入后测试：27 项向听数/回归、25 项视觉、47 项牌识别、46 项闭环、17 项数据集/评测回归，合计 162 项通过。测试进程关闭文件日志以绕过沙箱写权限限制，闭环使用注入点击与标注状态；未进行真实对局或构建。</li>
+<li>T4 工具已建立：6 张旧图全部归 development（1 张已标注，5 张待复核），test 为 0 张。猫咪牌面开发样本仅 1/13 张牌正确；此结果不能用于泛化验收；已决定不再适配猫咪皮肤（2026-10-09），验收限定默认牌面。<a href="datasets/real_game/README.md">查看收集与标注说明</a>。</li>
+<li>2026-09-08 本地报告：A 单张实机截图 14/14（13 张有效牌 + 1 个牌背拒识）；B 同图裁块扰动 182/182；C 模板变换 111/111。合计 307/307 不是 307 个独立真实场景。</li>
+<li>历史 C 层将白板拒识计为正确，反转赤牌允许回落普通牌；现已增加白板匹配与赤牌归一化，实机泛化仍需验收，旧基准期望需更新。报告手牌耗时 258ms，不能替代全管线延迟。</li>
+<li>7 个按钮模板已存在，坐标误报回退已移除；副露/局况/OCR/结果链路待接通，真实整场闭环缺少证据。无法确认特殊操作的结果时会暂停自动模式。</li>
+<li>原始截图及报告位于被 Git 忽略的 debug_output/；T4 需建立可移交数据与复现入口。模拟 E2E 和视觉诊断脚本不替代实机闭环验收。</li>
+</ul></section>
+<section aria-labelledby="tasks"><h2 id="tasks">任务与验收队列</h2><p>T1/T2/T3 代码修正及回归已完成，完整实机验收仍待进行；其余为待执行任务。下列标准用于最终验收。T1–T9 不沿用历史编号含义。</p><div class="table-wrap"><table><thead><tr><th scope="col">编号</th><th scope="col">任务与代码入口</th><th scope="col">验收标准</th><th scope="col">依赖</th></tr></thead><tbody>
+<tr id="T1"><th scope="row">T1<br><span class="priority">P0</span></th><td><strong>按钮真实性与点击定位</strong><p>区分检测结果与估算坐标；识别输出传递牌面外接框，避免等分 ROI 估算点击。</p><small>vision/buttons.py、vision/verifier.py</small></td><td>正负样本中不存在的按钮不被标为可见；点击目标对应已识别牌的真实边界。</td><td>无</td></tr>
+<tr id="T2"><th scope="row">T2<br><span class="priority">P0</span></th><td><strong>动作结果验证与失败处理</strong><p>修正牌河 &gt;= 判定、缺帧乐观通过与无窗口回退；核查管线启动、验证器选择和停止时在途动作。</p><small>vision/verifier.py、vision/executor.py、core/context.py</small></td><td>未变化画面、缺帧、无窗口均不判成功；未确认的动作不会继续盲点或重复执行；保留失败证据。</td><td>T1 定位接口</td></tr>
+<tr id="T3"><th scope="row">T3<br><span class="priority">P0</span></th><td><strong>麻将规则与牌编码</strong><p>修正听牌/和牌/立直分支、副露后摸牌与决策门槛、赤牌归一化；区分白板和牌背；接通和牌机会。</p><small>ai/engine.py、ai/shanten.py、vision/tiles.py、vision/differ.py</small></td><td>和牌不误触发立直；副露后仍正确触发出牌；白板与赤牌不丢失；不合法动作被拒绝。</td><td>集成验证依赖 T1/T2</td></tr>
+<tr id="T4"><th scope="row">T4<br><span class="priority">P1</span></th><td><strong>独立实机识别与时序基准</strong><p>按对局划分开发集/验证集，覆盖分辨率、主题、白板、赤牌、重复牌、摸牌与副露；将测试数据纳入可复现交付。</p><small>scripts/batch_validate.py、tests/、实机标注数据</small></td><td>保存独立对局来源、人工标注与固定复现入口；报告牌种准确率、整手正确率、拒识率、按钮误报率及延迟分位数，合成与真实结果分开；主题验收限定默认牌面（2026-10-09 决定：不再适配猫咪皮肤）。</td><td>可先收集；规则口径依赖 T3</td></tr>
+<tr id="T5"><th scope="row">T5<br><span class="priority">P1</span></th><td><strong>完整状态与合法操作链路</strong><p>填充副露、局况、分数和立直字段，接入 OCR；区分和牌机会与和牌结果；处理吃碰杠多候选及后续出牌；修复视觉监听入口。</p><small>vision/pipeline.py、vision/processor.py、vision/differ.py、game_state/tracker.py、core/context.py</small></td><td>标注回放中状态和事件顺序正确；决策仅使用可确认的合法操作；视觉监听模式采集正常且不点击。</td><td>T1/T3；验收数据来自 T4</td></tr>
+<tr id="T6"><th scope="row">T6<br><span class="priority">P1</span></th><td><strong>受监督完整对局与异常恢复</strong><p>先完成一局再连续多局；记录漏动作、误点、超时、状态失同步、窗口移动与停止行为。</p><small>全链路、对局日志与动作截图</small></td><td>声明并保存测试条件和局数；没有未解释的误点或静默失败；每次动作有可核对的结果，异常可停止或恢复。</td><td>T2/T4/T5；所有 P0 项完成</td></tr>
+<tr id="T7"><th scope="row">T7<br><span class="priority">P2</span></th><td><strong>识别性能与打包验收</strong><p>将 ROI 变化检测放在昂贵识别之前；缓存结果，测全管线延迟；锁定可复现依赖并核查 PIL 排除等构建配置。</p><small>vision/pipeline.py、vision/processor.py、build_exe.py、requirements.txt</small></td><td>同一基准上正确性不回退；报告全管线 p50/p95 和配置；干净机器完成安装、截图、模板加载和启动冒烟。</td><td>T4/T6</td></tr>
+<tr id="T8"><th scope="row">T8<br><span class="priority">P2</span></th><td><strong>MITM 协议兼容性与恢复</strong><p>核对封包头、ActionPrototype、字段类型、牌字符串转换、座次、重连与状态恢复；未验证前保持兼容入口标签。</p><small>proto/、mitm/addons.py、真实封包夹具</small></td><td>真实样本可正确解码并与标注事件一致；断线恢复无重复事件或状态漂移。</td><td>真实封包；不阻塞视觉主线</td></tr>
+<tr id="T9"><th scope="row">T9<br><span class="priority">P3</span></th><td><strong>备选路线与平台扩展</strong><p>仅在独立基准发现现有路线瓶颈时评估 ONNX/live 模板/素材提取；ADB 作为独立后续验收。</p><small>vision/classifier.py、action/mobile_executor.py、采集脚本</small></td><td>替代方案在同一独立数据集上证明收益；记录模型来源、运行代价和平台验证条件。</td><td>T4；主线稳定后选择</td></tr>
+</tbody></table></div></section>
+<section aria-labelledby="sequence"><h2 id="sequence">推进顺序</h2><ol>
+<li><strong>P0 正确性：</strong>T1/T2/T3；同时准备 T4 数据。此前不将自动模式作为稳定交付。</li>
+<li><strong>P1 完整性：</strong>T4 独立验证 → T5 状态与合法操作 → T6 受监督完整对局。</li>
+<li><strong>P2 性能与交付：</strong>T7；T8 MITM 是独立路线，不阻塞视觉主线。</li>
+<li><strong>P3 备选：</strong>根据独立数据的实际瓶颈再选择 T9，不以论文准确率承诺本项目效果。</li>
+</ol><p>不把 DXcam 截图耗时当作全管线帧率，也不把单张截图成功当作对局成功率。排期需在选定范围和验收条件后估算。</p></section>
+<section aria-labelledby="choices"><h2 id="choices">下一轮可选路线</h2><ul><li><strong>A（推荐）：</strong>建立 T4 独立实机数据集和回放基准。</li><li><strong>B：</strong>接通 T5 副露、立直和结果状态及合法操作。</li><li><strong>C：</strong>优先核查 T8 MITM 协议兼容性。</li></ul></section>
+<footer>来源：2026-10-08 当前代码核查、本地单元测试、2026-09-08 批量报告。<a href="docs/history/execution-plan-pre-review-2026-10-08.html">更新前的执行计划快照</a>保留历史内容，其根因判断、优先级与工期不作为当前计划依据。更新 README、TODO 与本计划时需保持状态口径和任务编号一致。</footer>
+</main></body></html>

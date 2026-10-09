@@ -57,6 +57,8 @@ RED_DORA_MAP = {34: 4, 35: 13, 36: 22}  # 赤5万→5m, 赤5筒→5p, 赤5索→
 
 # SIFT 特征匹配参数
 SIFT_MIN_MATCHES = 8        # 最少 good matches 才能算有效匹配
+# v2.5: SIFT 彻底失败、仅靠 CCOEFF 时的置信下限 (实测判对>=0.584, 误判<=0.513)
+SIFT_FAIL_CCOEFF_MIN = 0.55
 SIFT_LOWE_RATIO = 0.75      # Lowe's ratio test 阈值
 SIFT_SCORE_CONFIDENCE = 1.0 # SIFT 结果置信度 (特征匹配不产生连续分数)
 
@@ -75,6 +77,8 @@ TILE_ASPECT_RATIO = 0.65  # width / height (雀魂牌面比常见)
 # v2.3: 基于实际模板尺寸 (80x129), 非旧金山合成版 (31x48)
 DEFAULT_TILE_H = 129      # 实际模板高度 (像素)
 DEFAULT_TILE_W = 80       # 实际模板宽度 (像素)
+# v2.5: 实测游戏内牌面宽高比 (2557 宽画面真实牌面 122x190 ≈ 0.64)
+TILE_REAL_ASPECT = 0.64   # 手牌切分按此比例, 完整包住牌面后再归一化
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -141,7 +145,15 @@ class TileTemplateMatcher:
         self._sift_kp: Dict[int, tuple] = {}     # tile_id → (keypoints, descriptors)
         self._sift_edge_kp: Dict[int, tuple] = {} # tile_id → (keypoints, descriptors) on Canny edges
         self._orb_kp: Dict[int, tuple] = {}      # tile_id → (keypoints, descriptors)
-        self._flann = None          # FLANN matcher for SIFT
+        self._flann = None          # FLANN matcher for SIFT (逐模板, 回退用)
+        self._raw_desc_mat = None      # v2.5 numpy 描述子索引 (原始)
+        self._raw_desc_sq = None
+        self._raw_desc_labels = None
+        self._edge_desc_mat = None    # v2.5 numpy 描述子索引 (Canny 边缘)
+        self._edge_desc_sq = None
+        self._edge_desc_labels = None
+        self._raw_id_order: List[int] = []
+        self._edge_id_order: List[int] = []
         self._bf_matcher = None     # Brute-Force matcher for ORB
         self._sift_match_count = 0  # SIFT 匹配成功次数
         self._sift_fallback_count = 0  # SIFT 失败降级次数
@@ -284,6 +296,8 @@ class TileTemplateMatcher:
             except Exception as e:
                 Logger.debug(f"[Tiles] Failed to load live labels: {e}")
 
+        self._build_desc_index()
+
         live_count = len(self._live_labels)
         sift_count = len(self._sift_kp)
         orb_count = len(self._orb_kp)
@@ -369,8 +383,9 @@ class TileTemplateMatcher:
         # 浅色模板 + 浅色游戏 → 直接匹配, 高分
         # ═══════════════════════════════════════════════════
         if roi_desc is not None and len(roi_kp) >= 4:
-            result = self._sift_match_internal(
-                roi_desc, len(roi_kp), self._sift_kp
+            result = self._sift_match_stage(
+                roi_desc, len(roi_kp), self._raw_desc_mat, self._raw_desc_sq,
+                self._raw_desc_labels, self._raw_id_order, self._sift_kp
             )
             if result.tile_id >= 0:
                 return result
@@ -381,13 +396,93 @@ class TileTemplateMatcher:
         # Canny 边缘对颜色反转完全不变, 50/50 matches
         # ═══════════════════════════════════════════════════
         if roi_edge_desc is not None and len(roi_edge_kp) >= 4:
-            result = self._sift_match_internal(
-                roi_edge_desc, len(roi_edge_kp), self._sift_edge_kp
+            result = self._sift_match_stage(
+                roi_edge_desc, len(roi_edge_kp), self._edge_desc_mat, self._edge_desc_sq,
+                self._edge_desc_labels, self._edge_id_order, self._sift_edge_kp
             )
             if result.tile_id >= 0:
                 return result
 
         return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+
+    def _build_desc_index(self):
+        """v2.5: 把全部模板 SIFT 描述子拼成 numpy 大矩阵 (精确 L2, 一次矩阵乘)。"""
+        try:
+            for src, mat_a, sq_a, lab_a, ids_a in [
+                (self._sift_kp, "_raw_desc_mat", "_raw_desc_sq",
+                 "_raw_desc_labels", "_raw_id_order"),
+                (self._sift_edge_kp, "_edge_desc_mat", "_edge_desc_sq",
+                 "_edge_desc_labels", "_edge_id_order"),
+            ]:
+                descs, labels, id_order = [], [], []
+                for tid in sorted(src.keys()):
+                    if tid == 31:                          # 白板无特征
+                        continue
+                    _, desc = src[tid]
+                    if desc is None or len(desc) < 8:
+                        continue
+                    d = np.ascontiguousarray(desc, dtype=np.float32)
+                    descs.append(d)
+                    labels.append(np.full(len(d), tid, dtype=np.int32))
+                    id_order.append(tid)
+                if descs:
+                    mat = np.vstack(descs)
+                    setattr(self, mat_a, mat)
+                    setattr(self, sq_a, np.einsum("ij,ij->i", mat, mat))
+                    setattr(self, lab_a, np.concatenate(labels))
+                    setattr(self, ids_a, id_order)
+        except Exception as e:
+            Logger.debug(f"[Tiles] desc index build failed: {e}")
+
+    def _sift_match_stage(self, roi_desc, roi_kp_count, desc_mat, desc_sq,
+                          desc_labels, id_order, fallback_dict):
+        """numpy 精确批量优先; 不可用时回退逐模板 FLANN。"""
+        if desc_mat is not None and id_order:
+            return self._sift_match_numpy(
+                roi_desc, roi_kp_count, desc_mat, desc_sq, desc_labels, id_order)
+        return self._sift_match_internal(roi_desc, roi_kp_count, fallback_dict)
+
+    def _sift_match_numpy(self, roi_desc, roi_kp_count, mat, m_sq, labels, id_order):
+        """
+        v2.5 性能版: L2 距离矩阵一次算出, 每个模板内取最近两点做 Lowe。
+        与逐模板 FLANN k=2 语义一致, 但精确(非近似)且向量化, 单张毫秒级。
+        """
+        if roi_desc is None or roi_kp_count < 4 or mat is None:
+            return SiftMatchResult(-1, 0, 0, 0.0, 0.0)
+        q = np.ascontiguousarray(roi_desc, dtype=np.float32)
+        q_sq = np.einsum("ij,ij->i", q, q)[:, None]
+        d2 = q_sq + m_sq[None, :] - 2.0 * (q @ mat.T)
+        np.maximum(d2, 0.0, out=d2)
+        ratio2 = SIFT_LOWE_RATIO ** 2          # 平方距离上的 Lowe 阈值
+
+        best_id, best_score, best_matches = -1, 0.0, 0
+        second_id, second_score = -1, 0.0
+        for tid in id_order:
+            cols = labels == tid
+            if int(cols.sum()) < 2:
+                continue
+            sub = d2[:, cols]
+            two = np.partition(sub, 1, axis=1)[:, :2]   # 该模板内最近两点
+            d0, d1 = two[:, 0], two[:, 1]
+            good = int(np.count_nonzero(d0 < ratio2 * d1))
+            if good < SIFT_MIN_MATCHES:
+                continue
+            score = good / roi_kp_count
+            if score > best_score:
+                second_id, second_score = best_id, best_score
+                best_id, best_score, best_matches = tid, score, good
+            elif score > second_score and tid != best_id:
+                second_id, second_score = tid, score
+
+        confidence = min(1.0, best_score)
+        if best_id >= 0 and second_id >= 0 and best_score < 0.80 \
+                and best_score - second_score < 0.03:
+            Logger.debug(
+                f"[Tiles:SIFT-np] Low margin: best=({best_id},{best_score:.3f}) "
+                f"second=({second_id},{second_score:.3f})"
+            )
+            return SiftMatchResult(-1, best_matches, roi_kp_count, best_score, 0.0)
+        return SiftMatchResult(best_id, best_matches, roi_kp_count, best_score, confidence)
 
     def _sift_match_internal(self, roi_desc, roi_kp_count,
                               template_kp_dict) -> SiftMatchResult:
@@ -559,6 +654,9 @@ class TileTemplateMatcher:
 
         t0 = time.perf_counter()
 
+        if tile_roi is None or tile_roi.size == 0:
+            return (-1, 0.0)
+
         if len(tile_roi.shape) == 3:
             gray = cv2.cvtColor(tile_roi, cv2.COLOR_BGR2GRAY)
         else:
@@ -567,6 +665,26 @@ class TileTemplateMatcher:
         crop_h, crop_w = gray.shape[:2]
         if crop_h < 8 or crop_w < 4:
             return (-1, 0.0)
+
+        # White dragon has no glyph keypoints. Require both a neutral, uniform
+        # face and the complete template rim; plain empty regions must reject.
+        blank = self._templates.get(31)
+        if blank is not None:
+            face = cv2.resize(gray, (blank.shape[1], blank.shape[0]))
+            if self._invert_dark and face.mean() < 127:
+                face = cv2.bitwise_not(face)
+            center = face[face.shape[0] // 4:3 * face.shape[0] // 4,
+                          face.shape[1] // 4:3 * face.shape[1] // 4]
+            neutral = True
+            if len(tile_roi.shape) == 3:
+                ch, cw = tile_roi.shape[:2]
+                color = tile_roi[ch // 4:3 * ch // 4, cw // 4:3 * cw // 4]
+                means = color.mean(axis=(0, 1))
+                neutral = float(means.max() - means.min()) < 12
+            if neutral and center.mean() > 150 and center.std() < 8 and face.std() > 8:
+                error = float(cv2.matchTemplate(face, blank, cv2.TM_SQDIFF_NORMED)[0, 0])
+                if error < 0.02:
+                    return (31, 1.0 - error)
 
         # ═══════════════════════════════════════════════════════
         # v2.4: CLAHE 对比度增强
@@ -580,71 +698,84 @@ class TileTemplateMatcher:
         gray = clahe.apply(gray)
 
         # ═══════════════════════════════════════════════════════
-        # v2.4: SIFT 特征匹配 (主引擎)
-        #
-        # SIFT 匹配形状关键点 — 对亮度/对比度/主题不变。
-        # 模板来自游戏资产 (majsoul-generator 渲染), 与游戏内
-        # 实际渲染存在主题差异 (浅色 vs 深色)。SIFT 通过匹配
-        # 字符笔画的形状特征来跨越这一差异。
-        # SIFT 成功时直接返回 (skip 昂贵的模板匹配)。
-        # SIFT 失败时 fall through 到模板匹配。
+        # v2.5: 归一化到模板尺寸 — 消除分辨率/缩放差异 (核心修复)
+        #   实机单牌可能是 122x190 等任意尺寸, 统一 resize 到 80x129,
+        #   让 SIFT 与模板匹配都在与模板相同的尺度上进行。
         # ═══════════════════════════════════════════════════════
+        if crop_w != DEFAULT_TILE_W or crop_h != DEFAULT_TILE_H:
+            interp = cv2.INTER_AREA if crop_w > DEFAULT_TILE_W else cv2.INTER_LINEAR
+            norm = cv2.resize(gray, (DEFAULT_TILE_W, DEFAULT_TILE_H), interpolation=interp)
+        else:
+            norm = gray
+
+        # v2.5: 自适应反转 — 仅深色牌面(mean<127)反转; 浅色实机(mean~170)不反转
+        do_invert = bool(self._invert_dark and float(norm.mean()) < 127)
+        norm_cc = cv2.bitwise_not(norm) if do_invert else norm
+
+        # ── 通道 A: SIFT/ORB 特征候选 (归一化图上, 不再立即返回) ──
+        # 模板是浅色: 深色 ROI 先反转回浅色再提特征, 保证 SIFT 与模板同主题
+        sift_input = norm_cc if do_invert else norm
+        sift_id, sift_good, sift_conf = -1, 0, 0.0
+        nkp = len(self._sift.detect(sift_input, None)) if self._sift is not None else 0
         if self._use_sift and self.sift_ready:
-            sift_result = self._match_sift(tile_roi)
+            sift_result = self._match_sift(sift_input)
             if sift_result.tile_id >= 0 and sift_result.confidence > 0.15:
+                sift_id = sift_result.tile_id
+                sift_good = sift_result.good_matches
+                sift_conf = sift_result.confidence
                 self._sift_match_count += 1
-                tile_id = sift_result.tile_id
-                conf = sift_result.confidence
-
-                Logger.debug(
-                    f"[Tiles:SIFT] Matched tile {tile_id} ({tile_to_name(tile_id)}) "
-                    f"score={sift_result.score:.3f} good_matches={sift_result.good_matches}/{sift_result.total_kp}"
-                )
-
-                # 白板排除 (在 SIFT 通道也检查)
-                if tile_id == 31:
-                    return (-1, 0.0)
-
-                # 赤宝牌严格验证
-                if self._red_dora_strict and tile_id in RED_DORA_MAP:
-                    if conf < 0.88:
-                        normal_id = RED_DORA_MAP[tile_id]
-                        Logger.debug(
-                            f"[Tiles:SIFT] Red dora {tile_id}({TILE_NAMES[tile_id]}) "
-                            f"conf={conf:.3f} → downgrade to {normal_id}"
-                        )
-                        return (normal_id, conf)
-
-                self._match_count += 1
-                self._match_time_total += time.perf_counter() - t0
-                return (tile_id, conf)
             else:
                 self._sift_fallback_count += 1
+                if self._use_orb_fallback and self._orb is not None:
+                    orb_result = self._match_orb(sift_input)
+                    if orb_result.tile_id >= 0 and orb_result.confidence > 0.15:
+                        sift_id = orb_result.tile_id
+                        sift_good = orb_result.good_matches
+                        sift_conf = orb_result.confidence
+                        self._sift_match_count += 1
 
-            # ORB 降级 (SIFT 失败时尝试)
-            if self._use_orb_fallback and self._orb is not None:
-                orb_result = self._match_orb(tile_roi)
-                if orb_result.tile_id >= 0 and orb_result.confidence > 0.15:
-                    self._sift_match_count += 1
-                    tile_id = orb_result.tile_id
-                    conf = orb_result.confidence
+        # ── 通道 B: 归一化单尺度 CCOEFF (筒/索/字更准) ──
+        cc_id, cc_conf = self._normalized_ccoeff(norm_cc)
 
-                    Logger.debug(
-                        f"[Tiles:ORB] Matched tile {tile_id} ({tile_to_name(tile_id)}) "
-                        f"score={orb_result.score:.3f} good_matches={orb_result.good_matches}/{orb_result.total_kp}"
-                    )
+        # ── v2.5 融合: SIFT 万子准 / CCOEFF 筒索字准 (实测 13/13) ──
+        # 背面/空块: SIFT 关键点严重不足 → 拒识 (CCOEFF 会被白板高分误导)
+        if self._use_sift and self.sift_ready and nkp < SIFT_MIN_MATCHES and sift_id < 0:
+            Logger.debug(f"[Tiles] Reject blank/empty tile: SIFT kp={nkp}")
+            self._match_count += 1
+            self._match_time_total += time.perf_counter() - t0
+            return (-1, 0.0)
 
-                    if tile_id == 31:
-                        return (-1, 0.0)
+        fused_id, fused_conf = -1, 0.0
+        if sift_id >= 0 and cc_id >= 0 and sift_id == cc_id:
+            fused_id, fused_conf = sift_id, max(sift_conf, cc_conf)   # 两路一致
+        elif sift_id >= 0 and (0 <= sift_id <= 8 or sift_id == 34):
+            fused_id, fused_conf = sift_id, sift_conf                # 万子共享"萬"字 → 信 SIFT
+        elif sift_id >= 0 and cc_id >= 0:
+            fused_id, fused_conf = cc_id, cc_conf     # SIFT 有候选(非万子), 筒/索/字信 CCOEFF
+        elif cc_id >= 0 and cc_conf >= SIFT_FAIL_CCOEFF_MIN:
+            fused_id, fused_conf = cc_id, cc_conf     # SIFT 失败仅靠 CCOEFF, 须达置信下限, 否则安全拒识
+        elif sift_id >= 0:
+            fused_id, fused_conf = sift_id, sift_conf
 
-                    if self._red_dora_strict and tile_id in RED_DORA_MAP:
-                        if conf < 0.88:
-                            normal_id = RED_DORA_MAP[tile_id]
-                            return (normal_id, conf)
+        if fused_id >= 0:
+            if fused_id == 31:                                      # 白板排除
+                self._match_count += 1
+                self._match_time_total += time.perf_counter() - t0
+                return (-1, 0.0)
+            if fused_id in RED_DORA_MAP and ((self._red_dora_strict and fused_conf < 0.88) or do_invert):
+                # 深色反转后红色信息丢失, 灰度无法可靠区分赤宝红点 → 反转时一律回落普通牌
+                normal_id = RED_DORA_MAP[fused_id]
+                Logger.debug(f"[Tiles] Red dora {fused_id} conf={fused_conf:.3f} -> {normal_id}")
+                self._match_count += 1
+                self._match_time_total += time.perf_counter() - t0
+                return (normal_id, fused_conf)
+            self._match_count += 1
+            self._match_time_total += time.perf_counter() - t0
+            return (fused_id, float(fused_conf))
 
-                    self._match_count += 1
-                    self._match_time_total += time.perf_counter() - t0
-                    return (tile_id, conf)
+        # 融合无结果 → 落到 v2.3 多尺度兜底 (在归一化图上, 按已决定的反转)
+        gray = norm
+        crop_h, crop_w = DEFAULT_TILE_H, DEFAULT_TILE_W
 
         # ═══════════════════════════════════════════════════════
         # v2.3: 模板匹配 (兜底)
@@ -673,9 +804,7 @@ class TileTemplateMatcher:
         # ── v2.3: 灰度反转 ──
         #   模板为浅色主题 (像素 ~200), 游戏实际渲染为深色 (~70)
         #   始终反转 — 实测反转后 CCORR 从 0.79 提升到 0.94
-        inverted_gray = None
-        if self._invert_dark:
-            inverted_gray = cv2.bitwise_not(gray)
+        inverted_gray = cv2.bitwise_not(gray) if do_invert else None
 
         # 生成 ROI 的边缘图 (用原始灰度, 边缘对颜色不敏感)
         roi_edges = cv2.Canny(gray, 30, 90) if self._use_edges else None
@@ -815,6 +944,7 @@ class TileTemplateMatcher:
         Returns:
             [(tile_id, confidence), ...] 从左到右排序
         """
+        self._last_hand_boxes = []
         try:
             import cv2
         except ImportError:
@@ -826,7 +956,23 @@ class TileTemplateMatcher:
         h, w = hand_roi.shape[:2]
         gray = cv2.cvtColor(hand_roi, cv2.COLOR_BGR2GRAY) if len(hand_roi.shape) == 3 else hand_roi
 
-        # 自适应阈值
+        # v2.5: 优先用亮牌面连通域精确定位
+        #   垂直投影峰受牌面左半黑色文字影响会系统性偏左约半张牌,
+        #   连通域直接给出每张牌的精确外接框 (实测 14/14 对齐)。
+        boxes = self._locate_hand_tiles(gray, n_expected)
+        if boxes:
+            results = []
+            for (bx, by, bw, bh) in boxes:
+                crop = hand_roi[by:by + bh, bx:bx + bw]
+                if crop.size == 0:
+                    continue
+                tile_id, conf = self.match_single(crop)
+                results.append((tile_id, conf))
+                self._last_hand_boxes.append((bx, by, bw, bh))
+            if results:
+                return results
+
+        # ── 回退: 自适应阈值 + 垂直投影峰值法 (连通域不可靠时) ──
         binary = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 15, 3
@@ -850,25 +996,17 @@ class TileTemplateMatcher:
             peaks = sorted(peaks, key=lambda p: projection[p], reverse=True)[:n_expected]
             peaks = sorted(peaks)  # 重新按 x 排序
 
-        # 在每张牌处裁剪匹配
-        # v2.3: 裁剪尺寸以模板 1.0x 为基准, 稍留边距
-        #       模板 80x129, 裁剪 ~85x140 (含边距)
-        #       确保模板在 0.9-1.2x 范围内匹配, 避免过度缩放
-        tmpl_aspect = DEFAULT_TILE_W / DEFAULT_TILE_H  # ~0.62
-        # 目标裁剪高度: 模板高度 + 10% 边距
-        target_h = int(DEFAULT_TILE_H * 1.08)  # ~139
-        if target_h > h:
-            target_h = h - 4
-        tile_h = target_h
-        tile_w = int(tile_h * tmpl_aspect)  # ~86
-        # 检查宽度是否在峰值间距内
-        spacing = w / (n_expected or 14)
-        if tile_w > spacing * 0.80:
-            tile_w = int(spacing * 0.75)
-            tile_h = int(tile_w / tmpl_aspect)
+        n_tiles = n_expected or 14
+        spacing = w / n_tiles
+        tile_w = int(spacing * 0.94)
+        tile_h = int(tile_w / TILE_REAL_ASPECT)
+        if tile_h > h - 2:
+            tile_h = h - 2
+            tile_w = int(tile_h * TILE_REAL_ASPECT)
         tile_w = max(30, tile_w)
         half_w = tile_w // 2
-        y_offset = max(0, (h - tile_h) // 2)  # 垂直居中
+        y_offset = max(0, (h - tile_h) // 2)
+        peaks = [px for px in peaks if half_w <= px <= w - half_w]
 
         results = []
         for px in peaks:
@@ -876,15 +1014,46 @@ class TileTemplateMatcher:
             x2 = min(w, px + half_w)
             y1 = y_offset
             y2 = min(h, y1 + tile_h)
-
             crop = hand_roi[y1:y2, x1:x2]
             if crop.size == 0:
                 continue
-
             tile_id, conf = self.match_single(crop)
             results.append((tile_id, conf))
+            self._last_hand_boxes.append((x1, y1, x2 - x1, y2 - y1))
 
         return results
+
+    def _locate_hand_tiles(self, gray: np.ndarray,
+                           n_expected: int = None) -> List[Tuple[int, int, int, int]]:
+        """
+        v2.5: 亮牌面连通域定位 (雀魂牌面浅色、桌面深色)。
+        Otsu 分出亮牌面 → 外轮廓 → 按牌面尺寸/宽高比过滤 → 按 x 排序。
+        Returns: [(x,y,w,h), ...] 从左到右; 不可靠返回 [] 由调用方回退投影法。
+        """
+        try:
+            import cv2
+        except ImportError:
+            return []
+        h, w = gray.shape[:2]
+        _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        med_w = w / (n_expected or 14)
+        boxes = []
+        for c in contours:
+            bx, by, bw, bh = cv2.boundingRect(c)
+            if bw < med_w * 0.45 or bh < h * 0.5:   # 太小 → 噪点
+                continue
+            ar = bw / max(1, bh)
+            if not (0.35 <= ar <= 0.95):            # 牌面宽高比约束
+                continue
+            boxes.append((int(bx), int(by), int(bw), int(bh)))
+        boxes.sort(key=lambda b: b[0])
+        if not (3 <= len(boxes) <= 15):             # 手牌数量合理区间
+            return []
+        if n_expected is not None and len(boxes) > n_expected:
+            boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)[:n_expected]
+            boxes.sort(key=lambda b: b[0])
+        return boxes
 
     # ── 牌河识别 ──
 
@@ -1019,6 +1188,36 @@ class TileTemplateMatcher:
                 result.append(tile_id)
 
         return result
+
+    def _normalized_ccoeff(self, norm_gray: np.ndarray) -> Tuple[int, float]:
+        """
+        v2.5: 归一化单尺度 CCOEFF 匹配。
+        输入 norm_gray 已 resize 到 80x129 并按需反转, 与模板同尺度直接比较。
+        筒/索/字牌上比 SIFT 更稳; 白板(31)排除以免霸榜。
+        Returns: (tile_id, confidence>=0); 无模板返回 (-1, 0.0)
+        """
+        try:
+            import cv2
+        except ImportError:
+            return (-1, 0.0)
+        scores = {}
+        gh, gw = norm_gray.shape[:2]
+        for tid, tmpl in self._templates.items():
+            if tid == 31:  # 白板空白, 匹配一切 → 排除
+                continue
+            if tmpl.shape != norm_gray.shape:
+                tmpl = cv2.resize(tmpl, (gw, gh))
+            r = cv2.matchTemplate(norm_gray, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, mv, _, _ = cv2.minMaxLoc(r)
+            scores[tid] = float(mv)
+        best_id = max(scores, key=lambda k: scores[k])
+        best_val = scores[best_id]
+        # 赤宝仅比普通牌多一个红点: 若赤宝以极弱优势(<0.02)压过对应普通牌, 取普通牌
+        if best_id in RED_DORA_MAP:
+            normal_id = RED_DORA_MAP[best_id]
+            if normal_id in scores and best_val - scores[normal_id] < 0.02:
+                best_id, best_val = normal_id, scores[normal_id]
+        return best_id, max(0.0, best_val)
 
     # ── 自适应 scale ──
 
@@ -1178,6 +1377,10 @@ class TileRecognizer:
             [(tile_id, conf), ...] 从左到右, tile_id=-1 表示未识别
         """
         return self._matcher.recognize_hand_tiles(hand_roi, n_expected)
+
+    @property
+    def hand_boxes(self):
+        return list(getattr(self._matcher, '_last_hand_boxes', []))
 
     def recognize_river(self, river_roi: np.ndarray,
                          cols: int = 6) -> List[List[int]]:

@@ -1,5 +1,5 @@
 """
-按钮检测器 — Airtest 特征匹配 + OpenCV 模板匹配 + 坐标回退
+按钮检测器 — Airtest 特征匹配 + OpenCV 模板匹配
 
 只负责"按钮在不在屏幕"和"在哪", 不涉及其它识别。
 
@@ -9,7 +9,7 @@
 Tier 链:
   1. Airtest Template.exists() — SIFT/SURF 多尺度, ~50ms
   2. OpenCV cv2.matchTemplate() — 像素级模板匹配, ~5ms
-  3. 窗口相对坐标估算 — 数学计算, ~0ms
+匹配失败返回未检测到，不使用坐标估算作为可见证据。
 
 用法:
     detector = ButtonDetector()
@@ -121,7 +121,7 @@ class ButtonDetector:
         if loaded > 0:
             Logger.info(f"[Buttons] Loaded {loaded}/{len(self.BUTTON_TEMPLATES)} button templates")
         else:
-            Logger.warning("[Buttons] No button templates loaded — using coordinate fallback only")
+            Logger.warning("[Buttons] No button templates loaded — detection unavailable")
 
     # ── 检测 API ──
 
@@ -156,8 +156,10 @@ class ButtonDetector:
         """
         Tier 1: Airtest feature matching
         Tier 2: OpenCV template matching
-        Tier 3: Coordinate fallback
+        Failed matches are not evidence that a button is visible.
         """
+        if screen is None or screen.size == 0:
+            return None
         # Tier 1: Airtest SIFT/SURF
         if self._has_airtest and name in self._air_templates:
             pos = self._match_airtest(name, screen)
@@ -170,20 +172,12 @@ class ButtonDetector:
             if pos is not None:
                 return pos
 
-        # Tier 3: 坐标估算 (需要窗口位置)
-        if name in self.FALLBACK_POSITIONS:
-            h, w = screen.shape[:2]
-            rx, ry = self.FALLBACK_POSITIONS[name]
-            return (int(w * rx), int(h * ry))
-
         return None
 
     def _match_airtest(self, name: str,
                         screen: np.ndarray) -> Optional[Tuple[int, int]]:
         """Airtest 特征匹配"""
         try:
-            from airtest.core.api import exists
-
             template = self._air_templates.get(name)
             if template is None:
                 return None
@@ -192,9 +186,8 @@ class ButtonDetector:
             try:
                 pos = template.match_in(screen)
             except AttributeError:
-                # 回退: 直接传入屏幕截图
-                import cv2
-                pos = exists(template)
+                # Do not silently match a different, newly captured screen.
+                return None
 
             if pos:
                 # exists 返回 (left, top, right, bottom)
@@ -217,6 +210,10 @@ class ButtonDetector:
 
             template = self._cv_templates.get(name)
             if template is None or screen is None:
+                return None
+            # Constant templates have no evidence to localize a button;
+            # CCOEFF_NORMED can return 1 everywhere for these templates.
+            if template.size == 0 or float(np.std(template, axis=(0, 1)).max()) < 2:
                 return None
 
             h_t, w_t = template.shape[:2]

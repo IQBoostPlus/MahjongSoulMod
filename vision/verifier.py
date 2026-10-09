@@ -1,362 +1,176 @@
+"""Plan one action, click once, and poll for affirmative outcome evidence.
+
+Verification retries take fresh screenshots; they never repeat an uncertain
+click. Missing observations cannot count as success.
 """
-动作验证器 — Plan→Execute→Verify 闭环
-
-每次 AI 决策后:
-  1. PLAN:   确定点击目标坐标
-  2. EXECUTE: 执行鼠标点击
-  3. VERIFY:  截图验证预期结果
-  4. 失败 → 重试 (默认 3 次), 每次可调整策略
-
-验证策略 (各动作类型):
-  - DISCARD: 手牌 -1, 自家牌河 +1
-  - PON:     副露 +1, 手牌 -2
-  - CHI:     副露 +1, 手牌 -2
-  - KAN:     副露 +1, 手牌 -3 (明杠) 或 -4 (暗杠)
-  - RIICHI:  立直棒 +1, 立直按钮消失
-  - RON:     按钮消失 (对局结束)
-  - TSUMO:   按钮消失 (对局结束)
-
-用法:
-    verifier = ActionVerifier(pipeline, detector, click_fn)
-    ok = verifier.execute_with_verify(action)
-"""
-
 import time
+from collections import Counter
 from typing import Callable, Optional, Tuple
 
 from utils.log import Logger
 
 
 class ActionVerifier:
-    """
-    闭环动作验证器。
-
-    职责:
-      - 将 GameAction 转换为屏幕坐标
-      - 执行点击
-      - 截屏验证预期变化
-      - 失败时重试 (改变点击偏移)
-    """
-
     MAX_RETRIES = 3
-    VERIFY_WAIT = 0.3  # 点击后等待游戏响应的时间 (秒)
+    VERIFY_WAIT = 0.3
 
-    def __init__(self, pipeline=None, button_detector=None,
-                 click_fn: Callable[[int, int], bool] = None,
-                 max_retries: int = None):
-        """
-        Args:
-            pipeline: VisionPipeline 实例 (用于前后截帧验证)
-            button_detector: ButtonDetector 实例 (用于按钮定位)
-            click_fn: 鼠标点击函数 (x, y) -> bool
-            max_retries: 最大重试次数 (默认 3)
-        """
+    def __init__(self, pipeline=None, button_detector=None, click_fn=None,
+                 max_retries=None, can_execute: Callable[[], bool] = None):
         self._pipeline = pipeline
         self._buttons = button_detector
         self._click = click_fn or self._default_click
-        self._max_retries = max_retries or self.MAX_RETRIES
-
-        # 统计
+        self._max_retries = max(1, self.MAX_RETRIES if max_retries is None else max_retries)
+        self._can_execute = can_execute or (lambda: True)
         self._verify_count = 0
         self._retry_count = 0
-
-    # ── 主入口 ──
-
-    def execute_with_verify(self, action: "GameAction",
-                             pre_state: "VisionFrame" = None,
-                             window_rect: Tuple[int, int, int, int] = None) -> bool:
-        """
-        执行动作并验证。
-
-        Args:
-            action: AI 决策结果 (GameAction)
-            pre_state: 执行前帧状态 (用于验证). None=现截一帧
-            window_rect: 窗口矩形 (x, y, w, h). None=从 pre_state 取
-
-        Returns:
-            True 验证通过, False 全部重试失败
-        """
-        from ai.engine import ActionType
-
-        action_type = action.action
-        if action_type == ActionType.PASS or action_type == ActionType.NONE:
-            return True
-
-        # 捕获执行前状态
-        if pre_state is None and self._pipeline:
-            pre_state = self._pipeline.process_frame()
-
-        for attempt in range(self._max_retries):
-            # PLAN: 确定点击目标
-            target = self._plan_target(action, pre_state, window_rect, attempt)
-
-            if target is None:
-                Logger.warning(f"[Verifier] Cannot plan target for {action_type.value}")
-                continue
-
-            # EXECUTE
-            Logger.debug(
-                f"[Verifier] Attempt {attempt+1}/{self._max_retries}: "
-                f"{action_type.value} tile={action.tile} → ({target[0]}, {target[1]})"
-            )
-            ok = self._click(*target)
-            if not ok:
-                continue
-
-            # 等待游戏响应
-            time.sleep(self.VERIFY_WAIT)
-
-            # VERIFY
-            post_state = None
-            if self._pipeline:
-                post_state = self._pipeline.process_frame()
-
-            if self._verify_outcome(action, pre_state, post_state):
-                self._verify_count += 1
-                return True
-
-            Logger.debug(f"[Verifier] Verification failed, attempt {attempt+1}")
-
-        self._retry_count += 1
-        Logger.warning(f"[Verifier] All {self._max_retries} attempts failed for {action_type.value}")
-        return False
-
-    # ── 规划点击目标 ──
-
-    def _plan_target(self, action: "GameAction",
-                      pre_state: "VisionFrame",
-                      window_rect: Tuple[int, int, int, int],
-                      attempt: int) -> Optional[Tuple[int, int]]:
-        """
-        根据动作类型确定屏幕点击坐标。
-
-        按钮动作: 用 ButtonDetector
-        切牌动作: 在手牌区按 tile ID 定位
-        """
-        from ai.engine import ActionType
-
-        action_type = action.action
-        tile = action.tile
-
-        # ── 按钮动作 ──
-        if action_type in (ActionType.PON, ActionType.CHI, ActionType.KAN,
-                            ActionType.RON, ActionType.TSUMO, ActionType.PASS):
-            btn_name = action_type.value
-            if self._buttons:
-                # 需要当前帧来找按钮
-                screen = self._pipeline.process_frame() if self._pipeline else None
-                if screen is None:
-                    return self._fallback_button_pos(btn_name, window_rect, attempt)
-
-                # 从按钮区域裁切
-                h, w = None, None
-                import numpy as np
-                if isinstance(screen, np.ndarray):
-                    h, w = screen.shape[:2]
-
-                if self._pipeline and hasattr(self._pipeline, '_regions'):
-                    btn_roi = self._pipeline._regions.buttons.crop(
-                        screen, w or 1920, h or 1080
-                    )
-                    pos = self._buttons.find_button_position(btn_name, btn_roi)
-                    if pos:
-                        return pos
-
-                # 全屏匹配
-                raw_pos = self._buttons.find_button_position(btn_name, screen)
-                if raw_pos:
-                    return raw_pos
-
-            return self._fallback_button_pos(btn_name, window_rect, attempt)
-
-        # ── 切牌动作 ──
-        if action_type == ActionType.DISCARD:
-            return self._plan_tile_click(tile, pre_state, window_rect, attempt)
-
-        # ── 立直 ──
-        if action_type == ActionType.RIICHI:
-            # 立直 = 切牌 + 点立直按钮 (两步走，这里只规划切牌)
-            return self._plan_tile_click(tile, pre_state, window_rect, attempt)
-
-        return None
-
-    def _plan_tile_click(self, tile: int, pre_state: "VisionFrame",
-                          window_rect, attempt: int) -> Optional[Tuple[int, int]]:
-        """
-        确定手牌中某张牌的屏幕坐标。
-
-        在手牌 ROI 中按 tile 的排序位置 + 等分间隔计算。
-        """
-        if pre_state is None or not pre_state.hand_tiles:
-            return self._fallback_tile_pos(tile, window_rect, attempt)
-
-        # 找到 tile 在手牌中的索引
-        try:
-            idx = pre_state.hand_tiles.index(tile)
-        except ValueError:
-            # tile 不在手牌中 → 用近似索引
-            idx = min(tile, len(pre_state.hand_tiles) - 1) if pre_state.hand_tiles else 0
-
-        # 在手牌区域中计算位置
-        if window_rect is None:
-            window_rect = pre_state.window_rect
-
-        wx, wy, ww, wh = window_rect
-
-        # 手牌区域 (从 regions)
-        if self._pipeline and hasattr(self._pipeline, '_regions'):
-            hand = self._pipeline._regions.hand
-            hand_x = wx + int(hand.left * ww)
-            hand_y = wy + int(hand.top * wh)
-            hand_w = int(hand.width * ww)
-            hand_h = int(hand.height * wh)
-        else:
-            # 默认手牌区域 (窗口 3%-97% 宽, 88%-98% 高)
-            hand_x = wx + int(ww * 0.03)
-            hand_y = wy + int(wh * 0.88)
-            hand_w = int(ww * 0.94)
-            hand_h = int(wh * 0.10)
-
-        # 手牌数
-        n_tiles = max(pre_state.hand_count, 14)
-        step = hand_w // n_tiles
-
-        # 中心坐标 + 重试偏移
-        cx = hand_x + step * idx + step // 2
-        cy = hand_y + hand_h // 2
-
-        # 重试时增加随机偏移
-        import random
-        cx += random.randint(-step // 3, step // 3)
-        cy += random.randint(-hand_h // 3, hand_h // 3)
-
-        return (cx, cy)
-
-    # ── 回退定位 ──
-
-    def _fallback_button_pos(self, btn_name: str, window_rect,
-                               attempt: int) -> Optional[Tuple[int, int]]:
-        """按钮定位回退 — 使用硬编码相对坐标"""
-        from vision.buttons import ButtonDetector
-        fallback = ButtonDetector.FALLBACK_POSITIONS
-
-        if btn_name not in fallback:
-            return None
-
-        if window_rect is None:
-            return None
-
-        wx, wy, ww, wh = window_rect
-        rx, ry = fallback[btn_name]
-
-        import random
-        x = wx + int(ww * rx) + random.randint(-8, 8)
-        y = wy + int(wh * ry) + random.randint(-5, 5)
-
-        return (x, y)
-
-    def _fallback_tile_pos(self, tile: int, window_rect,
-                             attempt: int) -> Optional[Tuple[int, int]]:
-        """手牌定位回退 — 按索引估算"""
-        if window_rect is None:
-            return None
-
-        wx, wy, ww, wh = window_rect
-        idx = max(0, min(tile, 13))
-        step = int(ww * 0.94) // 14
-        x = wx + int(ww * 0.03) + step * idx + step // 2
-        y = wy + int(wh * 0.93)
-
-        import random
-        x += random.randint(-step // 3, step // 3)
-        return (x, y)
-
-    # ── 验证 ──
-
-    def _verify_outcome(self, action: "GameAction",
-                         before: "VisionFrame",
-                         after: "VisionFrame") -> bool:
-        """
-        验证动作效果。
-
-        比较执行前后的帧状态, 确认变化符合预期。
-        before/after 任一为 None → 跳过验证 (乐观 = True)
-        """
-        from ai.engine import ActionType
-
-        if before is None or after is None:
-            # 无法验证 → 乐观假设成功
-            return True
-
-        action_type = action.action
-
-        # DISCARD: 手牌 -1, 牌河 +1
-        if action_type == ActionType.DISCARD:
-            hand_ok = after.hand_count == before.hand_count - 1
-            river_ok = len(after.discards[0]) >= len(before.discards[0])
-            if not hand_ok:
-                Logger.debug("[Verifier] DISCARD: hand count mismatch")
-            return hand_ok or river_ok  # 至少满足一个
-
-        # PON: 手牌 -2, 副露 +1
-        if action_type == ActionType.PON:
-            hand_ok = after.hand_count <= before.hand_count - 2
-            meld_ok = len(after.melds[0]) > len(before.melds[0]) if after.melds else False
-            return hand_ok or meld_ok
-
-        # CHI: 手牌 -2, 副露 +1
-        if action_type == ActionType.CHI:
-            hand_ok = after.hand_count <= before.hand_count - 2
-            meld_ok = len(after.melds[0]) > len(before.melds[0]) if after.melds else False
-            return hand_ok or meld_ok
-
-        # KAN: 手牌 -3 (明杠) 或 -4 (暗杠)
-        if action_type == ActionType.KAN:
-            hand_ok = after.hand_count <= before.hand_count - 3
-            meld_ok = len(after.melds[0]) > len(before.melds[0]) if after.melds else False
-            return hand_ok or meld_ok
-
-        # RIICHI: 手牌 -1 (先切牌), 立直按钮可能消失
-        if action_type == ActionType.RIICHI:
-            hand_ok = after.hand_count <= before.hand_count - 1
-            return hand_ok
-
-        # RON/TSUMO: 按钮出现又消失 (对局结束)
-        if action_type in (ActionType.RON, ActionType.TSUMO):
-            return True  # 难以精确验证, 乐观
-
-        # PASS / 未知: 乐观通过
-        return True
-
-    # ── 默认鼠标点击 ──
+        self.last_failure = None
 
     @staticmethod
-    def _default_click(x: int, y: int) -> bool:
-        """默认鼠标点击实现 (pyautogui)"""
-        try:
-            import pyautogui
-            cur_x, cur_y = pyautogui.position()
+    def _known_hand(frame):
+        return (frame is not None and bool(frame.hand_tiles)
+                and all(0 <= t <= 36 for t in frame.hand_tiles)
+                and len(frame.hand_confidences) == frame.hand_count
+                and all(c >= 0.5 for c in frame.hand_confidences))
 
-            # 两段贝塞尔式移动
-            import random
-            mid_x = cur_x + (x - cur_x) * random.uniform(0.4, 0.7)
-            mid_y = cur_y + (y - cur_y) * random.uniform(0.3, 0.6)
-
-            pyautogui.moveTo(mid_x, mid_y, duration=random.uniform(0.03, 0.10))
-            pyautogui.moveTo(x, y, duration=random.uniform(0.02, 0.08))
-            time.sleep(random.uniform(0.01, 0.05))
-            pyautogui.click()
+    def execute_with_verify(self, action, pre_state=None, window_rect=None):
+        from ai.engine import ActionType
+        self.last_failure = None
+        if action.action == ActionType.NONE:
             return True
-        except Exception as e:
-            Logger.debug(f"[Verifier] Click failed: {e}")
+        if not self._can_execute() or self._pipeline is None:
+            return False
+        if pre_state is None:
+            pre_state = self._pipeline.process_frame()
+        if pre_state is None:
+            return False
+        if (action.expected_hand is not None
+                and Counter(action.expected_hand) != Counter(pre_state.hand_tiles)):
+            return False
+        if window_rect is None:
+            window_rect = pre_state.window_rect
+        if window_rect != pre_state.window_rect or min(window_rect[2:]) <= 0:
             return False
 
-    # ── 统计 ──
+        # Riichi is button first, then the selected legal discard. If either
+        # step is uncertain, stop rather than guessing another click.
+        if action.action == ActionType.RIICHI:
+            button = self._button_target('riichi', pre_state)
+            if (button is None or self._plan_tile_click(action.tile, pre_state, window_rect, 0) is None
+                    or not self._can_execute() or not self._click(*button)):
+                return False
+            time.sleep(self.VERIFY_WAIT)
+            selected = self._pipeline.process_frame()
+            if (selected is None or selected.timestamp <= pre_state.timestamp
+                    or selected.window_rect != window_rect
+                    or Counter(selected.hand_tiles) != Counter(pre_state.hand_tiles)):
+                return False
+            target = self._plan_tile_click(action.tile, selected, window_rect, 0)
+        else:
+            target = self._plan_target(action, pre_state, window_rect, 0)
+        if target is None or not self._can_execute() or not self._click(*target):
+            return False
+        after = None
+        for attempt in range(self._max_retries):
+            if not self._can_execute():
+                return False
+            time.sleep(self.VERIFY_WAIT)
+            after = self._pipeline.process_frame()
+            if not self._can_execute():
+                return False
+            if self._verify_outcome(action, pre_state, after):
+                self._verify_count += 1
+                return True
+            if attempt:
+                self._retry_count += 1
+        self.last_failure = {
+            'action': action.action.value, 'tile': action.tile,
+            'before_hand': list(pre_state.hand_tiles),
+            'after_hand': list(after.hand_tiles) if after is not None else None,
+            'before_river': list(pre_state.discards[0]),
+            'after_river': list(after.discards[0]) if after is not None else None,
+        }
+        Logger.warning(f'[Verifier] Outcome unconfirmed: {self.last_failure}')
+        return False
+
+    @staticmethod
+    def _button_target(name, frame):
+        if frame is None or name not in frame.visible_buttons:
+            return None
+        pos = frame.button_positions.get(name)
+        if pos is None:
+            return None
+        x, y, w, h = frame.window_rect
+        return pos if x <= pos[0] < x + w and y <= pos[1] < y + h else None
+
+    def _plan_target(self, action, pre_state, window_rect, attempt):
+        from ai.engine import ActionType
+        if action.action in (ActionType.DISCARD, ActionType.RIICHI):
+            return self._plan_tile_click(action.tile, pre_state, window_rect, attempt)
+        return self._button_target(action.action.value, pre_state)
+
+    def _plan_tile_click(self, tile, pre_state, window_rect, attempt):
+        if not self._known_hand(pre_state) or tile not in pre_state.hand_tiles:
+            return None
+        if len(pre_state.hand_boxes) != pre_state.hand_count:
+            return None
+        idx = pre_state.hand_tiles.index(tile)
+        if pre_state.hand_confidences and (len(pre_state.hand_confidences) != pre_state.hand_count
+                                          or min(pre_state.hand_confidences) < 0.5):
+            return None
+        x, y, w, h = pre_state.hand_boxes[idx]
+        wx, wy, ww, wh = window_rect or pre_state.window_rect
+        if w <= 0 or h <= 0 or x < wx or y < wy or x + w > wx + ww or y + h > wy + wh:
+            return None
+        return (x + w // 2, y + h // 2)
+
+    def _verify_outcome(self, action, before, after):
+        from ai.engine import ActionType
+        if before is None or after is None or after.timestamp <= before.timestamp:
+            return False
+        if before.window_rect != after.window_rect:
+            return False
+        kind = action.action
+        if kind in (ActionType.DISCARD, ActionType.RIICHI):
+            if not self._known_hand(before) or not self._known_hand(after):
+                return False
+            removed = Counter(before.hand_tiles) - Counter(after.hand_tiles)
+            added = Counter(after.hand_tiles) - Counter(before.hand_tiles)
+            hand_ok = (after.hand_count == before.hand_count - 1
+                       and removed == Counter([action.tile]) and not added)
+            old, new = before.discards[0], after.discards[0]
+            river_ok = len(new) == len(old) + 1 and new[:-1] == old and new[-1] == action.tile
+            result = hand_ok and river_ok
+            if kind == ActionType.RIICHI:
+                result = result and after.riichi_sticks == before.riichi_sticks + 1
+            return result
+        if kind in (ActionType.PON, ActionType.CHI, ActionType.KAN):
+            if not self._known_hand(before) or not self._known_hand(after):
+                return False
+            expected = {ActionType.PON: 2, ActionType.CHI: 2, ActionType.KAN: 3}[kind]
+            return (after.hand_count == before.hand_count - expected
+                    and len(after.melds[0]) == len(before.melds[0]) + 1)
+        if kind in (ActionType.RON, ActionType.TSUMO):
+            # Button disappearance alone may be a timeout or recognition error.
+            return (kind.value in before.visible_buttons and kind.value not in after.visible_buttons
+                    and after.round_ended)
+        if kind == ActionType.PASS:
+            return 'pass' in before.visible_buttons and 'pass' not in after.visible_buttons
+        return False
+
+    @staticmethod
+    def _default_click(x, y):
+        try:
+            import pyautogui
+            pyautogui.click(x, y)
+            return True
+        except Exception as exc:
+            Logger.debug(f'[Verifier] Click failed: {exc}')
+            return False
 
     @property
-    def verify_count(self) -> int:
+    def verify_count(self):
         return self._verify_count
 
     @property
-    def retry_count(self) -> int:
+    def retry_count(self):
         return self._retry_count

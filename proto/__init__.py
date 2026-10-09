@@ -36,14 +36,13 @@ def tile_id(suit: int, value: int) -> int:
 def tile_suit(tile: int) -> int:
     """牌ID → 花色 (0=万, 1=筒, 2=索, 3=字)"""
     if tile >= 34:  # 赤5
-        return (tile - 34) // 9
+        return tile - 34
     return tile // 9
 
 def tile_value(tile: int) -> int:
     """牌ID → 数值 (1-9, 字牌1-7)"""
     if tile >= 34:  # 赤5
-        v = (tile - 34) % 9 + 1
-        return v
+        return 5
     v = tile % 9 + 1
     return v
 

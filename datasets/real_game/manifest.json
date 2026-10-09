@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "samples": [
+    {
+      "id": "shot-32f2fe38548e",
+      "session_id": "legacy-unknown-session-group",
+      "split": "development",
+      "status": "pending",
+      "source": {
+        "kind": "local_capture",
+        "provenance": "Legacy local annotated screenshot, already used to tune v2.5; has ROI overlays.",
+        "used_for_tuning": true,
+        "original_local_path": "debug_output/1.png"
+      },
+      "image": "images/shot-32f2fe38548e.png",
+      "sha256": "958b0d59e9eef65263ea8471eb430b92dd8d8d9edff1e6dbd6d3a92f1d3811e2",
+      "size": [
+        2557,
+        1597
+      ],
+      "theme": "unknown",
+      "frame_index": 0,
+      "imported_at": "2026-10-08T08:18:46.903771+00:00",
+      "hand": {
+        "roi": [
+          0.116,
+          0.817,
+          0.825,
+          0.954
+        ],
+        "tiles": null
+      },
+      "buttons": {
+        "roi": [
+          0.287,
+          0.531,
+          0.877,
+          0.792
+        ],
+        "visible": null
+      },
+      "reviewer": null
+    },
+    {
+      "id": "shot-e58f1ed1d014",
+      "session_id": "legacy-unknown-session-group",
+      "split": "development",
+      "status": "pending",
+      "source": {
+        "kind": "external_unknown",
+        "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
+        "used_for_tuning": true,
+        "original_local_path": "debug_output/web_shots/w1024x597_fulu.jpg"
+      },
+      "image": "images/shot-e58f1ed1d014.jpg",
+      "sha256": "1bf293f13005d2cf87be490c4d0da604f3631f7ebabe5d2c97c698f3fe846d95",
+      "size": [
+        1024,
+        597
+      ],
+      "theme": "unknown",
+      "frame_index": 1,
+      "imported_at": "2026-10-08T08:18:46.921706+00:00",
+      "hand": {
+        "roi": [
+          0.116,
+          0.817,
+          0.825,
+          0.954
+        ],
+        "tiles": null
+      },
+      "buttons": {
+        "roi": [
+          0.287,
+          0.531,
+          0.877,
+          0.792
+        ],
+        "visible": null
+      },
+      "reviewer": null
+    },
+    {
+      "id": "shot-294a9852f306",
+      "session_id": "legacy-unknown-session-group",
+      "split": "development",
+      "status": "pending",
+      "source": {
+        "kind": "external_unknown",
+        "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
+        "used_for_tuning": true,
+        "original_local_path": "debug_output/web_shots/w1280x1024_5x4.jpg"
+      },
+      "image": "images/shot-294a9852f306.jpg",
+      "sha256": "c4a79fbb738b2f15ead11de577b137c8e761175fbddcfae3b265e1e2a7a0f10d",
+      "size": [
+        1280,
+        1024
+      ],
+      "theme": "unknown",
+      "frame_index": 2,
+      "imported_at": "2026-10-08T08:18:46.940856+00:00",
+      "hand": {
+        "roi": [
+          0.116,
+          0.817,
+          0.825,
+          0.954
+        ],
+        "tiles": null
+      },
+      "buttons": {
+        "roi": [
+          0.287,
+          0.531,
+          0.877,
+          0.792
+        ],
+        "visible": null
+      },
+      "reviewer": null
+    },
+    {
+      "id": "shot-228e6a45999d",
+      "session_id": "legacy-unknown-session-group",
+      "split": "development",
+      "status": "pending",
+      "source": {
+        "kind": "external_unknown",
+        "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
+        "used_for_tuning": true,
+        "original_local_path": "debug_output/web_shots/w1360x850_16x10.jpg"
+      },
+      "image": "images/shot-228e6a45999d.jpg",
+      "sha256": "2487909f06bdd6862ac1f800c0e2a8e05e9f3f4c6aaba429e72cbbc0597a7224",
+      "size": [
+        1360,
+        850
+      ],
+      "theme": "unknown",
+      "frame_index": 3,
+      "imported_at": "2026-10-08T08:18:46.961439+00:00",
+      "hand": {
+        "roi": [
+          0.116,
+          0.817,
+          0.825,
+          0.954
+        ],
+        "tiles": null
+      },
+      "buttons": {
+        "roi": [
+          0.287,
+          0.531,
+          0.877,
+          0.792
+        ],
+        "visible": null
+      },
+      "reviewer": null
+    },
+    {
+      "id": "shot-a228506f51f0",
+      "session_id": "legacy-unknown-session-group",
+      "split": "development",
+      "status": "reviewed",
+      "source": {
+        "kind": "external_unknown",
+        "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
+        "used_for_tuning": true,
+        "original_local_path": "debug_output/web_shots/w1920x1080_16x9.jpg"
+      },
+      "image": "images/shot-a228506f51f0.jpg",
+      "sha256": "209967cb01dc410d7125cd9289eb038c1e769e731c49c9783bf3c5ceec22b8b3",
+      "size": [
+        1920,
+        1080
+      ],
+      "theme": "cat-tile-skin",
+      "frame_index": 4,
+      "imported_at": "2026-10-08T08:18:46.985792+00:00",
+      "hand": {
+        "roi": [
+          0.11,
+          0.845,
+          0.76,
+          1.0
+        ],
+        "tiles": [
+          2,
+          5,
+          13,
+          13,
+          13,
+          13,
+          15,
+          32,
+          19,
+          19,
+          19,
+          23,
+          25
+        ]
+      },
+      "buttons": {
+        "roi": [
+          0.45,
+          0.66,
+          0.91,
+          0.85
+        ],
+        "visible": []
+      },
+      "reviewer": "assistant visual review, 2026-10-08; manual labels, not inferred predictions"
+    },
+    {
+      "id": "shot-36fffa7c389f",
+      "session_id": "legacy-unknown-session-group",
+      "split": "development",
+      "status": "pending",
+      "source": {
+        "kind": "external_unknown",
+        "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
+        "used_for_tuning": true,
+        "original_local_path": "debug_output/web_shots/w3345x1882_hi.jpg"
+      },
+      "image": "images/shot-36fffa7c389f.jpg",
+      "sha256": "85a8af8f2fe7e792195ead373d590d05bb2c9930a8b580a2196f90eb47f73d2b",
+      "size": [
+        3345,
+        1882
+      ],
+      "theme": "unknown",
+      "frame_index": 5,
+      "imported_at": "2026-10-08T08:18:47.014295+00:00",
+      "hand": {
+        "roi": [
+          0.116,
+          0.817,
+          0.825,
+          0.954
+        ],
+        "tiles": null
+      },
+      "buttons": {
+        "roi": [
+          0.287,
+          0.531,
+          0.877,
+          0.792
+        ],
+        "visible": null
+      },
+      "reviewer": null
+    }
+  ]
+}

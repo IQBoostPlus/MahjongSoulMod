@@ -79,7 +79,9 @@ class StateDiffer:
             self._prev = current
             # 首帧: 检测是否已在游戏中
             if current.hand_count >= 13:
-                return [VisionEvent("game_start", {}, 0.8)]
+                from types import SimpleNamespace
+                return ([VisionEvent("game_start", {}, 0.8), self._build_new_round_event(current)]
+                        + self._detect_button_events(SimpleNamespace(visible_buttons=[]), current))
             return []
 
         events = []
@@ -87,6 +89,7 @@ class StateDiffer:
         # ── 游戏生命周期 ──
         if self._detect_game_start(self._prev, current):
             events.append(VisionEvent("game_start", {}, 0.9))
+            events.append(self._build_new_round_event(current))
 
         if self._detect_new_round(self._prev, current):
             events.append(self._build_new_round_event(current))
@@ -145,7 +148,7 @@ class StateDiffer:
 
             # 额外条件: 所有牌河都清空了
             all_empty = all(len(cur.discards[s]) == 0 for s in range(4))
-            if all_empty:
+            if all_empty and any(prev.discards):
                 return True
 
         return False
@@ -156,7 +159,9 @@ class StateDiffer:
 
     def _detect_draw(self, prev: "VisionFrame", cur: "VisionFrame") -> Optional[VisionEvent]:
         """检测自家摸牌: 手牌 13→14"""
-        if prev.hand_count == 13 and cur.hand_count == 14:
+        if (prev.hand_count >= 1 and prev.hand_count % 3 == 1
+                and cur.hand_count == prev.hand_count + 1
+                and all(0 <= t <= 36 for t in cur.hand_tiles)):
             # 找新增的牌
             prev_set = set(prev.hand_tiles)
             cur_list = cur.hand_tiles
@@ -172,7 +177,9 @@ class StateDiffer:
                 for _ in range(diff):
                     new_tiles.append(tile)
 
-            tile = new_tiles[0] if new_tiles else (cur.draw_tile or cur.hand_tiles[-1])
+            if len(new_tiles) != 1 or prev_c - cur_c:
+                return None
+            tile = new_tiles[0]
 
             return VisionEvent("draw_tile", {
                 "seat": 0,
@@ -185,14 +192,14 @@ class StateDiffer:
     def _detect_discard_at_seat(self, prev: "VisionFrame", cur: "VisionFrame",
                                   seat: int) -> Optional[VisionEvent]:
         """检测某座位的舍牌"""
-        prev_river = set(prev.discards[seat]) if seat < len(prev.discards) else set()
+        prev_river = prev.discards[seat] if seat < len(prev.discards) else []
         cur_river = cur.discards[seat] if seat < len(cur.discards) else []
 
         # 牌河增长
-        if len(cur_river) > len(prev_river):
+        if len(cur_river) == len(prev_river) + 1 and cur_river[:-1] == prev_river:
             # 找新增牌
-            for tile in cur_river:
-                if tile not in prev_river:
+            for tile in cur_river[len(prev_river):]:
+                if tile >= 0:
                     # 检测是否立直宣言 (自家分-1000, 立直棒+1)
                     is_liqi = 0
                     if cur.riichi_sticks > prev.riichi_sticks:
@@ -247,11 +254,11 @@ class StateDiffer:
 
         # 自摸/荣和按钮出现 → 和了机会
         if "tsumo" in appeared:
-            events.append(VisionEvent("hu", {
+            events.append(VisionEvent("agari_available", {
                 "seat": 0, "zimo": True, "tile": -1,
             }, 0.85))
         elif "ron" in appeared:
-            events.append(VisionEvent("hu", {
+            events.append(VisionEvent("agari_available", {
                 "seat": 0, "zimo": False, "tile": -1,
             }, 0.85))
 
@@ -302,77 +309,33 @@ class StatefulDiffer(StateDiffer):
         self._pending: Dict[str, dict] = {}  # event_signature → {event, count, age}
         self._last_emitted: List[VisionEvent] = []  # 上一批已发出事件
 
-    def diff(self, current: "VisionFrame") -> List[VisionEvent]:
-        """带迟滞的帧差分"""
-        # 获取原始候选事件
-        candidates = super().diff(current)
+    @staticmethod
+    def _frame_signature(frame):
+        return (tuple(frame.hand_tiles), tuple(tuple(r) for r in frame.discards),
+                tuple(tuple((m.meld_type, tuple(m.tiles), m.called_from) for m in row) for row in frame.melds),
+                tuple(sorted(frame.visible_buttons)), frame.riichi_sticks,
+                frame.round_info, frame.round_ended)
 
-        if not candidates:
-            # 衰减所有 pending
-            expired = []
-            for sig, entry in self._pending.items():
-                entry["age"] += 1
-                if entry["age"] >= self._max_pending_age:
-                    expired.append(sig)
-            for sig in expired:
-                del self._pending[sig]
+    def diff(self, current):
+        # Hold the accepted baseline until the NEW state has persisted. Comparing
+        # successive raw frames would lose a one-time transition after one frame.
+        if current is None or any(t < 0 or t > 36 for t in current.hand_tiles):
+            self._candidate_signature = None
+            self._candidate_count = 0
             return []
-
-        # 对每个候选事件, 检查是否与 pending 匹配
-        confirmed = []
-        for event in candidates:
-            sig = self._event_signature(event)
-
-            if sig in self._pending:
-                # 已在 pending: 增加计数
-                entry = self._pending[sig]
-                entry["count"] += 1
-                entry["age"] = 0
-
-                if entry["count"] >= self._confirmation_frames:
-                    confirmed.append(event)
-                    del self._pending[sig]
-            else:
-                # 新事件: 加入 pending
-                self._pending[sig] = {
-                    "event": event,
-                    "count": 1,
-                    "age": 0,
-                }
-
-        # 清理过期 pending
-        expired = []
-        for sig, entry in self._pending.items():
-            entry["age"] += 1
-            if entry["age"] >= self._max_pending_age:
-                expired.append(sig)
-        for sig in expired:
-            del self._pending[sig]
-
-        # 去重: 不长连发同类型事件
-        filtered = self._dedup(confirmed)
-
-        self._last_emitted = filtered
-        return filtered
+        signature = self._frame_signature(current)
+        if signature != getattr(self, '_candidate_signature', None):
+            self._candidate_signature = signature
+            self._candidate_count = 1
+        else:
+            self._candidate_count += 1
+        if self._candidate_count < self._confirmation_frames:
+            return []
+        return super().diff(current)
 
     def reset(self):
-        """重置 -- 清除 pending 事件"""
         super().reset()
+        self._candidate_signature = None
+        self._candidate_count = 0
         self._pending.clear()
         self._last_emitted.clear()
-
-    @staticmethod
-    def _event_signature(event: VisionEvent) -> str:
-        """生成事件的唯一签名 (用于 pending 匹配)"""
-        seat = event.data.get("seat", -1)
-        tile = event.data.get("tile", -1)
-        return f"{event.event_type}:{seat}:{tile}"
-
-    def _dedup(self, events: List[VisionEvent]) -> List[VisionEvent]:
-        """过滤重复的同类事件"""
-        if not events:
-            return events
-
-        # 移除与上一批完全重复的事件
-        last_sigs = {self._event_signature(e) for e in self._last_emitted}
-        return [e for e in events if self._event_signature(e) not in last_sigs]

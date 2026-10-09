@@ -142,7 +142,11 @@ class AppContext:
 
         # 游戏事件 → AI 决策触发
         self._event_bus.subscribe(GameEvent.DRAW_TILE, self._on_draw_tile)
+        self._event_bus.subscribe(GameEvent.NEW_ROUND, self._on_draw_tile)
+        self._event_bus.subscribe(GameEvent.CHI, self._on_call_completed)
+        self._event_bus.subscribe(GameEvent.PON, self._on_call_completed)
         self._event_bus.subscribe(GameEvent.DISCARD_TILE, self._on_discard_tile)
+        self._event_bus.subscribe(GameEvent.AGARI_AVAILABLE, self._on_agari_available)
 
         # AI 决策 → 动作执行
         self._event_bus.subscribe(GameEvent.AI_DECISION, self._on_ai_decision)
@@ -220,7 +224,6 @@ class AppContext:
             output_color="BGR",
         )
         capture = CaptureFactory.create(config)
-        capture.start()
 
         # 2. ROI 布局 (从窗口分辨率选择)
         from vision.regions import RegionConfig
@@ -286,6 +289,8 @@ class AppContext:
 
         # 确保基础组件初始化
         instance._ensure_setup()
+        executor._can_execute = lambda: (instance._running and instance._auto_mode
+                                        and not instance._listen_only)
 
         # 绑定 processor 到 tracker
         processor._tracker = instance._tracker
@@ -382,6 +387,7 @@ class AppContext:
         from vision.differ import StatefulDiffer
         differ = StatefulDiffer(confirmation_frames=2)
 
+        self._vision_pipeline.start()
         self._vision_processor.start_loop(self._vision_pipeline, differ, fps)
         Logger.info(f"[AppContext] Vision loop started ({fps} FPS)")
         return True
@@ -439,6 +445,8 @@ class AppContext:
     def stop(self):
         """停止所有子系统"""
         self._running = False
+        if self._executor and hasattr(self._executor, 'set_enabled'):
+            self._executor.set_enabled(False)
         if self._vision_processor:
             try:
                 self._vision_processor.stop_loop()
@@ -495,9 +503,32 @@ class AppContext:
             return
 
         hand = state.players[state.self_seat].hand
-        if state.last_action == "draw" and len(hand) > 13:
+        player = state.players[state.self_seat]
+        if (state.last_action in ("draw", "new_round", "call") and len(hand) == 14 - 3 * len(player.melds)
+                and all(0 <= t <= 36 for t in hand)):
+            from ai.engine import ActionType
+            if state.available_actions and 'tsumo' in state.available_actions:
+                return  # Handled as an explicit win opportunity event.
             self._ai.on_state_update(state)
             decision = self._ai.decide_discard(state)
+            if (decision.action == ActionType.RIICHI and state.available_actions is not None
+                    and 'riichi' not in state.available_actions):
+                decision.action = ActionType.DISCARD
+            self._event_bus.publish(GameEvent.AI_DECISION, action=decision)
+
+    def _on_call_completed(self, event, data):
+        state = data.get('state')
+        if state and state.last_action_seat == state.self_seat and state.last_action == 'call':
+            self._on_draw_tile(event, data)
+
+    def _on_agari_available(self, event, data):
+        if not self._running or not self._auto_mode or self._listen_only:
+            return
+        state = self._tracker.state
+        is_tsumo = data.get('zimo', False)
+        name = 'tsumo' if is_tsumo else 'ron'
+        if state.in_game and state.available_actions and name in state.available_actions:
+            decision = self._ai.decide_agari(state, is_tsumo)
             self._event_bus.publish(GameEvent.AI_DECISION, action=decision)
 
     def _on_discard_tile(self, event: GameEvent, data: dict):
@@ -520,6 +551,8 @@ class AppContext:
         incoming = state.last_discard
         if incoming >= 0:
             for call_type in ("pon", "chi", "kan"):
+                if state.available_actions is not None and call_type not in state.available_actions:
+                    continue
                 result = self._ai.decide_call(state, incoming, call_type)
                 if result.action.value != "pass":
                     self._event_bus.publish(GameEvent.AI_DECISION, action=result)
@@ -529,7 +562,7 @@ class AppContext:
 
     def _on_ai_decision(self, event: GameEvent, data: dict):
         """AI 决策结果 → ActionExecutor 执行"""
-        if self._listen_only:
+        if self._listen_only or not self._running or not self._auto_mode:
             action = data.get("action")
             if action:
                 Logger.info(f"[ListenOnly] Would execute: {action.action.value} tile={action.tile}")
@@ -537,16 +570,27 @@ class AppContext:
 
         action = data.get("action")
         if action:
-            ok = self._executor.execute(action)
+            if self._vision_pipeline is not None:
+                action.expected_hand = tuple(self._tracker.state.players[self._tracker.state.self_seat].hand)
+            try:
+                ok = self._executor.execute(action)
+            except Exception as exc:
+                Logger.error(f'[Action] Execution failed: {exc}')
+                ok = False
             if ok:
                 self._event_bus.publish(GameEvent.ACTION_DONE, action=action)
             else:
+                self._auto_mode = False
+                if hasattr(self._executor, 'set_enabled'):
+                    self._executor.set_enabled(False)
                 self._event_bus.publish(GameEvent.ACTION_FAILED, action=action)
 
     # ── 控制事件 ──
 
     def _on_toggle_auto(self, event: GameEvent, data: dict):
         self._auto_mode = not self._auto_mode
+        if hasattr(self._executor, 'set_enabled'):
+            self._executor.set_enabled(self._auto_mode and self._running and not self._listen_only)
         status = "ON" if self._auto_mode else "OFF"
         msg = f"[Control] Auto mode: {status}"
         Logger.info(msg)
@@ -557,6 +601,8 @@ class AppContext:
     def _on_kill_switch(self, event: GameEvent, data: dict):
         self._running = False
         self._auto_mode = False
+        if hasattr(self._executor, 'set_enabled'):
+            self._executor.set_enabled(False)
         msg = "[Control] KILL SWITCH — all automation stopped"
         Logger.info(msg)
         print(f"\n{'='*40}\n  {msg}\n{'='*40}\n")

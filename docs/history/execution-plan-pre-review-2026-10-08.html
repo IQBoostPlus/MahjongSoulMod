@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MajsoulAutoMod 未完成项执行计划</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif; background: #F4F3EE; color: #1A1B1C; line-height: 1.65; padding: 24px 16px; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { border-bottom: 2px solid #2B7A9C; padding-bottom: 14px; margin-bottom: 22px; }
+  h1 { font-size: 22px; color: #1A1B1C; }
+  .meta { font-size: 12.5px; color: #6B7280; margin-top: 6px; }
+  .meta b { color: #2B7A9C; }
+  h2 { font-size: 16px; margin: 26px 0 10px; padding-left: 10px; border-left: 4px solid #2B7A9C; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #E4E3DD; vertical-align: top; }
+  th { background: #2B7A9C; color: #fff; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.badge, .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .p0 { background: rgba(234,102,104,0.16); color: #C0392B; }
+  .p1 { background: rgba(250,173,20,0.18); color: #8A5A1E; }
+  .p2 { background: rgba(155,187,244,0.18); color: #2A5DB0; }
+  .p3 { background: rgba(148,216,195,0.2); color: #1E7A63; }
+  .st-done { background: rgba(82,196,26,0.14); color: #389E0D; }
+  .st-part { background: rgba(250,173,20,0.18); color: #8A5A1E; }
+  .st-open { background: rgba(234,102,104,0.14); color: #C0392B; }
+  .cards { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+  .card { flex: 1 1 240px; min-width: 0; background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 14px; padding: 14px 16px; }
+  .card h3 { font-size: 14px; margin-bottom: 6px; }
+  .card p, .card li { font-size: 12.5px; color: #3A3B3C; }
+  .card ul { padding-left: 16px; }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; font-size: 13px; }
+  .flow .step { background: #fff; border: 1px solid rgba(0,0,0,0.1); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; }
+  .flow .step b { color: #2B7A9C; }
+  .flow .arrow { color: #9AA0A6; font-weight: 700; }
+  .risk { background: rgba(250,173,20,0.12); border-left: 4px solid #FAAD14; border-radius: 6px; padding: 10px 14px; font-size: 13px; margin: 8px 0; }
+  .note { font-size: 12px; color: #6B7280; margin-top: 6px; }
+  .task-id { font-family: Consolas, monospace; font-weight: 700; color: #2B7A9C; white-space: nowrap; }
+  footer { margin-top: 30px; padding-top: 12px; border-top: 1px solid #E4E3DD; font-size: 11.5px; color: #9AA0A6; }
+  code { font-family: Consolas, monospace; font-size: 12px; background: rgba(0,0,0,0.05); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>MajsoulAutoMod v2.4 — 未完成项执行计划</h1>
+  <div class="meta">依据 <b>TODO.MD</b>（2026-06-17）「未完成 / 待解决」清单 + <b>2026-09-07 实际代码核查</b> · 优先级 P0 → P3 · 工时均为估算</div>
+</header>
+
+<h2>1. 状态快照：TODO 未完成项 vs 实际核查</h2>
+<table>
+  <tr><th style="width:26%;">TODO 未完成项</th><th style="width:44%;">2026-09-07 核查结果</th><th style="width:12%;">状态</th><th style="width:18%;">计划编号</th></tr>
+  <tr><td>实机低对比度牌面无法匹配（核心阻塞）</td><td>仍在阻塞。调试输出（debug_output/）显示 CLAHE 将 crop std 21→29，仍远低于模板 std 58；SIFT 关键点 0-3 个（需 ≥8）</td><td><span class="pill st-open">未解决</span></td><td><span class="task-id">T1/T2</span></td></tr>
+  <tr><td>深色 live 模板仅 11/34</td><td><code>vision/templates/tiles_live/</code> 目录已建但为空，采集未开始；脚本已就绪（auto_collect / capture_live / collect_loop）</td><td><span class="pill st-open">未开始</span></td><td><span class="task-id">T1</span></td></tr>
+  <tr><td>缺按钮模板图片</td><td><code>templates/</code> 已有 7 个按钮 PNG（chi/kan/pass/pon/riichi/ron/tsumo）；buttons.py 已集成模板加载，无模板才回退坐标</td><td><span class="pill st-done">已完成*</span></td><td><span class="task-id">T4</span></td></tr>
+  <tr><td>牌河识别未验证</td><td>ROI 坐标仍为估算值，牌河识别无实机验证记录</td><td><span class="pill st-open">未验证</span></td><td><span class="task-id">T3</span></td></tr>
+  <tr><td>副露（吃碰杠）检测未测试</td><td>无实机测试记录</td><td><span class="pill st-open">未测试</span></td><td><span class="task-id">T3</span></td></tr>
+  <tr><td>立直检测未测试</td><td>无实机测试记录</td><td><span class="pill st-open">未测试</span></td><td><span class="task-id">T3</span></td></tr>
+  <tr><td>完整对局端到端未测试</td><td><code>tests/test_e2e.py</code> 已存在，但未确认在真实对局跑通</td><td><span class="pill st-part">半完成</span></td><td><span class="task-id">T5/T6</span></td></tr>
+  <tr><td>缺 ONNX 神经网络模型</td><td><code>vision/models/</code> 为空，未下载</td><td><span class="pill st-open">未完成</span></td><td><span class="task-id">T9</span></td></tr>
+  <tr><td>resources.assets 原生素材提取</td><td>未开始（Unity AssetBundle 解析）</td><td><span class="pill st-open">未开始</span></td><td><span class="task-id">T10</span></td></tr>
+  <tr><td>移动端（ADB）视觉采集未测试</td><td>capture.py 有 ADB 后端，未验证</td><td><span class="pill st-open">未测试</span></td><td><span class="task-id">T7</span></td></tr>
+  <tr><td>增量模板更新机制</td><td>未实现</td><td><span class="pill st-open">未完成</span></td><td><span class="task-id">T8</span></td></tr>
+  <tr><td>自适应 ROI</td><td>未实现</td><td><span class="pill st-open">未完成</span></td><td><span class="task-id">T11</span></td></tr>
+</table>
+<p class="note">* 按钮模板文件已存在、代码已接入，但尚未在真实对局中验证识别率，故归入 P1 验证任务。</p>
+
+<h2>2. 优先级总览</h2>
+<div class="cards">
+  <div class="card">
+    <h3><span class="pill p0">P0</span> 解锁识别（核心阻塞）</h3>
+    <ul>
+      <li><b>T1</b> live 模板采集（推荐路线）</li>
+      <li><b>T2</b> 模板降级管线（备选路线）</li>
+      <li><b>T3</b> 牌河 / 副露 / 立直 ROI 校准验证</li>
+    </ul>
+    <p class="note">牌面识别不解决，下游一切验证都无意义。</p>
+  </div>
+  <div class="card">
+    <h3><span class="pill p1">P1</span> 打通端到端</h3>
+    <ul>
+      <li><b>T4</b> 按钮模板实机验证</li>
+      <li><b>T5</b> 实机管线冒烟测试</li>
+      <li><b>T6</b> Plan→Execute→Verify 闭环测试</li>
+    </ul>
+    <p class="note">依赖 P0 完成后才能得到有意义的实机结果。</p>
+  </div>
+  <div class="card">
+    <h3><span class="pill p2">P2</span> 覆盖面与稳定性</h3>
+    <ul>
+      <li><b>T7</b> 移动端 ADB 采集验证</li>
+      <li><b>T8</b> 增量模板更新机制</li>
+    </ul>
+    <p class="note">独立推进，不阻塞主线。</p>
+  </div>
+  <div class="card">
+    <h3><span class="pill p3">P3</span> 中期增强 / 替代路线</h3>
+    <ul>
+      <li><b>T9</b> ONNX ViT 模型（99.67%）</li>
+      <li><b>T10</b> resources.assets 原生素材提取</li>
+      <li><b>T11</b> 自适应 ROI</li>
+    </ul>
+    <p class="note">T9/T10 可替代 T1 路线，需网络 / 高不确定性。</p>
+  </div>
+</div>
+
+<h2>3. 任务明细</h2>
+<table>
+  <tr><th style="width:5%;">ID</th><th style="width:9%;">优先级</th><th style="width:24%;">任务</th><th style="width:26%;">验收标准</th><th style="width:18%;">依赖</th><th style="width:18%;">建议入口 / 备注</th></tr>
+
+  <tr><td class="task-id">T1</td><td><span class="pill p0">P0</span></td><td><b>live 模板采集</b>：在游戏中边玩边采集深色牌面，补齐 11/34 → 34/34（含筒子、赤宝牌）</td><td>实机对局中 SIFT 关键点 ≥8；牌种识别率从 ~38% 提升至 ≥90%</td><td>实机运行数局</td><td><code>scripts/auto_collect_templates.py</code>；listen-only 模式可半自动</td></tr>
+
+  <tr><td class="task-id">T2</td><td><span class="pill p0">P0</span></td><td><b>模板降级管线</b>：对现有模板做模糊 + 降对比度，模拟游戏渲染</td><td>降级后模板与实机 crop 的 SIFT 匹配率 ≥90%</td><td>—</td><td>仅在 T1 受阻时启用；CLAHE std 21→29 仍不足（目标 58）</td></tr>
+
+  <tr><td class="task-id">T3</td><td><span class="pill p0">P0</span></td><td><b>牌河 / 副露 / 立直 ROI 校准与检测验证</b></td><td>牌河 crop 识别率与手牌一致；吃碰杠、立直事件正确进入 GameTracker</td><td>T1 或 T2</td><td><code>scripts/test_vision_live.py</code>；ROI 现为估算值</td></tr>
+
+  <tr><td class="task-id">T4</td><td><span class="pill p1">P1</span></td><td><b>按钮模板实机验证</b>：验证 7 个已采集按钮模板在真实对局中的识别率</td><td>7 个按钮识别率 ≥95%，不再回退坐标估算</td><td>T1/T2</td><td>buttons.py 已集成 Airtest+OpenCV 双路径；<code>templates/</code> 模板已就绪</td></tr>
+
+  <tr><td class="task-id">T5</td><td><span class="pill p1">P1</span></td><td><b>实机管线冒烟测试</b>：采集 → 识别 → 组装全链路实机跑通</td><td>真实对局中 VisionFrame 输出正常、帧率达标（DXcam ~3ms/帧）</td><td>T3 + T4</td><td><code>scripts/test_vision_live.py</code></td></tr>
+
+  <tr><td class="task-id">T6</td><td><span class="pill p1">P1</span></td><td><b>端到端闭环测试</b>：Plan→Execute→Verify 全链路对局测试</td><td>完整对局中自动打牌无人干预，验证失败自动重试（3 次）</td><td>T5</td><td><code>tests/test_e2e.py</code> 已存在，需实机跑通</td></tr>
+
+  <tr><td class="task-id">T7</td><td><span class="pill p2">P2</span></td><td><b>移动端 ADB 采集验证</b></td><td>安卓端截图 → 识别链路可用</td><td>独立</td><td>capture.py ADB 后端已实现，未验证</td></tr>
+
+  <tr><td class="task-id">T8</td><td><span class="pill p2">P2</span></td><td><b>增量模板更新机制</b></td><td>新采集模板自动增量入库 + 去重，无需全量重建</td><td>T1 跑起来</td><td>配合 tiles_live/ 目录结构</td></tr>
+
+  <tr><td class="task-id">T9</td><td><span class="pill p3">P3</span></td><td><b>ONNX ViT 模型</b></td><td>下载并集成分类器，识别率达 99.67%（论文值）</td><td>网络恢复</td><td><code>vision/models/</code> 目前为空；classifier.py 框架已就绪</td></tr>
+
+  <tr><td class="task-id">T10</td><td><span class="pill p3">P3</span></td><td><b>resources.assets 原生素材提取</b></td><td>从 Unity AssetBundle 解出全部 34 张原生牌面</td><td>独立</td><td>可替代 T1 路线；解析不确定性较高</td></tr>
+
+  <tr><td class="task-id">T11</td><td><span class="pill p3">P3</span></td><td><b>自适应 ROI</b></td><td>自动检测窗口大小 / 主题，ROI 自动适配</td><td>独立</td><td>长期优化项</td></tr>
+</table>
+
+<h2>4. 执行顺序建议</h2>
+<div class="flow">
+  <div class="step"><b>阶段 0 · P0</b>（约 1-2 天）<br>T1 采集 → T2 备选 → T3 验证</div>
+  <span class="arrow">→</span>
+  <div class="step"><b>阶段 1 · P1</b>（约 2-3 天）<br>T4 按钮 → T5 冒烟 → T6 闭环</div>
+  <span class="arrow">→</span>
+  <div class="step"><b>阶段 2 · P2</b>（约 1-2 天）<br>T7 移动端 · T8 增量更新</div>
+  <span class="arrow">→</span>
+  <div class="step"><b>阶段 3 · P3</b>（按需）<br>T9 ONNX · T10 assets · T11 自适应</div>
+</div>
+<p class="note">阶段 2、3 可与阶段 0/1 并行推进（不阻塞主线）。</p>
+
+<h2>5. 风险与备选路线</h2>
+<div class="risk"><b>live 采集慢：</b>赤宝牌等稀有牌面样本获取慢 → 启用 T2 模板降级先行，或并行推进 T10 assets 提取。</div>
+<div class="risk"><b>网络受限：</b>T9 ONNX 下载依赖网络（TODO 记载网络受限）→ 不阻塞主线，识别问题先用 T1/T2 缓解。</div>
+<div class="risk"><b>实机验证门槛：</b>端到端测试需要真实对局环境 → 先用 listen-only 模式半自动采集与冒烟，再逐步放开自动执行。</div>
+
+<footer>
+  数据来源：TODO.MD（2026-06-17 更新，作者记录）与项目代码现状核查（2026-09-07）· 工时、识别率目标均为估算 / 计划值，非实测结果 · 本计划仅供项目内部梳理使用
+</footer>
+
+</div>
+</body>
+</html>

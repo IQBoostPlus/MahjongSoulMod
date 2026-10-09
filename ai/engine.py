@@ -17,7 +17,7 @@ from functools import lru_cache
 from random import random, choice as rand_choice
 
 from game_state.tracker import GameState, Player, MeldType
-from ai.shanten import ShantenCalculator, to_count_array, TILE_COUNT, MAX_PER_TILE
+from ai.shanten import ShantenCalculator, to_count_array, normalize_tile, TILE_COUNT, MAX_PER_TILE
 from utils.log import Logger
 
 
@@ -38,6 +38,7 @@ class GameAction:
     action: ActionType = ActionType.NONE
     tile: int = -1
     call_seat: int = -1
+    expected_hand: Optional[Tuple[int, ...]] = None
 
 
 @dataclass
@@ -77,10 +78,10 @@ class DoraCalculator:
         27: 28,  # 东 → 南
         28: 29,  # 南 → 西
         29: 30,  # 西 → 北
-        30: 31,  # 北 → 白
+        30: 27,  # 北 → 东
         31: 32,  # 白 → 发
         32: 33,  # 发 → 中
-        33: 27,  # 中 → 东
+        33: 31,  # 中 → 白
     }
 
     @staticmethod
@@ -109,7 +110,7 @@ class DoraCalculator:
     def count_dora_in_hand(hand: List[int], dora_indicators: List[int]) -> int:
         """手牌中有几张宝牌"""
         dora_set = DoraCalculator.get_dora_tiles(dora_indicators)
-        return sum(1 for t in hand if t in dora_set)
+        return sum(int(normalize_tile(t) in dora_set) + int(t in (34, 35, 36)) for t in hand)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -136,9 +137,9 @@ class DefenseAnalysis:
                 continue
 
             player = state.players[pid]
-            discards_list = player.discards
+            discards_list = [normalize_tile(t) for t in player.discards]
             discards_set = set(discards_list)
-            my_discards = set(state.players[self_seat].discards)
+            my_discards = {normalize_tile(t) for t in state.players[self_seat].discards}
 
             for tile_id in range(TILE_COUNT):
                 # ── 层级1: 现物 = 绝对安全 ──
@@ -185,12 +186,12 @@ class DefenseAnalysis:
     def get_safe_discards(self, state: GameState, hand: List[int]) -> List[int]:
         """按安全度排序手牌 (最安全在前)"""
         risks = self.evaluate_risks(state)
-        return sorted(hand, key=lambda t: risks[t] if 0 <= t < TILE_COUNT else 1.0)
+        return sorted(hand, key=lambda t: risks[normalize_tile(t)] if 0 <= normalize_tile(t) < TILE_COUNT else 1.0)
 
     def get_risks_for_hand(self, state: GameState, hand: List[int]) -> Dict[int, float]:
         """返回手牌中每张牌的风险值"""
         risks = self.evaluate_risks(state)
-        return {t: risks[t] for t in hand if 0 <= t < TILE_COUNT}
+        return {t: risks[normalize_tile(t)] for t in hand if 0 <= normalize_tile(t) < TILE_COUNT}
 
     # ── 内部方法 ──
 
@@ -258,15 +259,15 @@ def _hand_cache_key(hand: List[int]) -> int:
     return hash(tuple(sorted(hand)))
 
 
-def cached_shanten(hand: List[int]) -> int:
+def cached_shanten(hand: List[int], meld_count: int = 0) -> int:
     """带缓存的向听数计算"""
     global _cache_hits, _cache_misses
-    key = _hand_cache_key(hand)
+    key = (tuple(sorted(normalize_tile(t) for t in hand)), meld_count)
     if key in _shanten_cache:
         _cache_hits += 1
         return _shanten_cache[key]
     _cache_misses += 1
-    result = ShantenCalculator.calculate(hand)
+    result = ShantenCalculator.calculate(hand, meld_count)
     if len(_shanten_cache) > 50000:
         _shanten_cache.clear()
     _shanten_cache[key] = result
@@ -307,28 +308,33 @@ class AIDecisionMaker:
     def decide_discard(self, state: GameState) -> GameAction:
         """出牌决策 (自家摸牌后) → 返回 GameAction"""
         hand = state.players[state.self_seat].hand
-        if not hand:
+        player = state.players[state.self_seat]
+        if (not hand or any(t < 0 or t > 36 for t in hand)
+                or len(hand) != 14 - 3 * len(player.melds)):
             return GameAction(ActionType.NONE)
 
         hand_counts = to_count_array(hand)
-        shanten = cached_shanten(hand)
+        shanten = cached_shanten(hand, len(player.melds))
 
         Logger.info(f"[AI] Hand: {len(hand)} tiles, shanten={shanten}")
 
-        # 听牌 → 考虑立直
-        if shanten == -1:
-            if self._should_riichi(state):
-                discard = self._choose_riichi_discard(state, hand)
-                Logger.info(f"[AI] Riichi → discard {discard}")
-                return GameAction(ActionType.RIICHI, discard)
-            else:
-                # 默听 (damaten): 选和率最高的牌
-                discard = self._choose_damaten_discard(state, hand)
-                Logger.info(f"[AI] Damaten → discard {discard}")
-                return GameAction(ActionType.DISCARD, discard)
+        # A complete shape is not proof of a legal win (yaku/furiten). The
+        # context confirms the actual tsumo/ron opportunity before executing.
+        if shanten == -1 and (state.available_actions is None or 'tsumo' in state.available_actions):
+            return GameAction(ActionType.NONE)
+
+        if player.is_liqi:
+            # After riichi, only the exact drawn tile may be discarded.
+            if state.last_action == 'draw' and state.last_draw_tile in hand:
+                return GameAction(ActionType.DISCARD, state.last_draw_tile)
+            return GameAction(ActionType.NONE)
 
         # 牌效率分析
         candidates = self._evaluate_discards(hand, hand_counts, state)
+
+        tenpai = [c for c in candidates if c.shanten == 0 and c.waits]
+        if tenpai and self._should_riichi(state):
+            return GameAction(ActionType.RIICHI, tenpai[0].tile)
 
         if candidates:
             best = candidates[0]
@@ -352,12 +358,18 @@ class AIDecisionMaker:
                     call_type: str) -> GameAction:
         """鸣牌决策"""
         hand = state.players[state.self_seat].hand
+        if state.players[state.self_seat].is_liqi or not 0 <= incoming_tile <= 36:
+            return GameAction(ActionType.PASS)
+        hand = [normalize_tile(t) for t in hand]
+        incoming_tile = normalize_tile(incoming_tile)
 
         if call_type == "pon":
             if self._should_pon(state, incoming_tile, hand):
                 return GameAction(ActionType.PON, incoming_tile)
 
         elif call_type == "chi":
+            if state.last_discard_seat != (state.self_seat + 3) % 4:
+                return GameAction(ActionType.PASS)
             if self._should_chi(state, incoming_tile, hand):
                 return GameAction(ActionType.CHI, incoming_tile)
 
@@ -430,9 +442,11 @@ class AIDecisionMaker:
         player = state.players[state.self_seat]
 
         # 前提条件
-        if not player.is_menzen:
+        if not player.is_menzen or player.is_liqi:
             return False
         if player.score < 1000:
+            return False
+        if state.left_tiles < 4:
             return False
         if self.params.aggression < 0.2:
             return False
@@ -488,12 +502,13 @@ class AIDecisionMaker:
             new_hand.remove(tile)
             new_counts = to_count_array(new_hand)
 
-            shanten = cached_shanten(new_hand)
+            meld_count = len(state.players[state.self_seat].melds)
+            shanten = cached_shanten(new_hand, meld_count)
             waits = []
             wait_count = 0
 
-            if shanten == -1:  # 听牌
-                waits = ShantenCalculator.get_waiting_tiles(new_counts)
+            if shanten == 0:
+                waits = ShantenCalculator.get_waiting_tiles(new_counts, meld_count)
                 wait_count = sum(
                     MAX_PER_TILE - counts[t]
                     for t in waits if 0 <= t < TILE_COUNT
@@ -502,8 +517,8 @@ class AIDecisionMaker:
             # 各维度评分
             shanten_score = self._score_shanten(shanten)
             wait_bonus = min(wait_count, 40) * 1.0
-            dora_val = 2.0 if tile in dora_set else 0.0
-            safety = 1.0 - (risks[tile] if 0 <= tile < TILE_COUNT else 0.5)
+            dora_val = float(2 * int(normalize_tile(tile) in dora_set) + int(tile >= 34))
+            safety = 1.0 - risks[normalize_tile(tile)]
 
             # 好形率: 保留顺子搭子 (简易估算)
             shape_rate = self._estimate_shape_rate(tile, new_counts)
@@ -518,7 +533,7 @@ class AIDecisionMaker:
             )
 
             # 不要切宝牌 (dora) 的惩罚 — 在听牌前带宝牌有额外价值
-            if tile in dora_set and shanten > -1:
+            if dora_val > 0 and shanten >= 0:
                 score -= 8.0 * (1.0 - self.params.aggression)
 
             results.append(CandidateDiscard(
@@ -583,15 +598,16 @@ class AIDecisionMaker:
         if self.params.aggression < 0.2:
             return False
 
-        before = cached_shanten(hand)
+        meld_count = len(state.players[state.self_seat].melds)
+        before = cached_shanten(hand, meld_count)
         after_hand = [t for t in hand]
         for _ in range(2):
             if tile in after_hand:
                 after_hand.remove(tile)
-        after = cached_shanten(after_hand)
+        after = cached_shanten(after_hand, meld_count + 1)
 
         # 碰后向听前进或保持听牌
-        return after < before or (after == -1 and before == -1)
+        return after < before or (after == 0 and before == 0)
 
     def _should_chi(self, state: GameState, tile: int, hand: List[int]) -> bool:
         """判断是否吃"""
@@ -600,7 +616,8 @@ class AIDecisionMaker:
         if self.params.aggression < 0.2:
             return False
 
-        before = cached_shanten(hand)
+        meld_count = len(state.players[state.self_seat].melds)
+        before = cached_shanten(hand, meld_count)
 
         suit_start = (tile // 9) * 9
         patterns = [[-2, -1], [-1, +1], [+1, +2]]
@@ -618,7 +635,7 @@ class AIDecisionMaker:
                     after_hand.remove(a)
                 if b in after_hand:
                     after_hand.remove(b)
-                after = cached_shanten(after_hand)
+                after = cached_shanten(after_hand, meld_count + 1)
                 if after < before:
                     return True
 
@@ -642,8 +659,8 @@ class AIDecisionMaker:
             return False
 
         # 听牌时不杠
-        before = cached_shanten(hand)
-        if before == -1:
+        before = cached_shanten(hand, len(state.players[state.self_seat].melds))
+        if before <= 0:
             return False
 
         return True

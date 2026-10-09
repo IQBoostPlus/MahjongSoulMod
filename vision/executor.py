@@ -9,10 +9,9 @@
   2. Plan: 确定点击目标坐标
   3. Execute: 鼠标点击 + 拟人化延迟
   4. Verify: 截后帧验证效果
-  5. 失败 → 重试 (最多 3 次)
+  5. 轮询确认；未确认则停止，不重复点击
 
-回退策略 (vision pipeline 不可用时):
-  → 降级到坐标估算 + 无验证模式 (兼容旧版 AirtestActionExecutor)
+管线、窗口或动作结果不可确认时停止执行。
 
 用法:
     executor = VisionActionExecutor(pipeline, button_detector)
@@ -54,6 +53,10 @@ class VisionActionExecutor:
             click_fn=self._click_at,
         )
         self._differ = differ
+        self._can_execute = lambda: True
+        self._executing_rect = None
+        self._verifier._click = self._click_at
+        self._verifier._can_execute = self._is_active
 
         # 状态
         self._enabled = True
@@ -80,162 +83,52 @@ class VisionActionExecutor:
 
     # ── 主执行 ──
 
-    def execute(self, action: "GameAction") -> bool:
-        """
-        执行 AI 决策动作。
+    def _is_active(self):
+        return self._enabled and self._can_execute()
 
-        Args:
-            action: ai.engine.GameAction 实例
-
-        Returns:
-            True 成功, False 失败
-        """
-        from ai.engine import ActionType, GameAction
-
-        if not self._enabled:
-            Logger.debug(f"[VisionExec] Skipped (disabled): {action.action.value}")
-            return False
-
-        self._action_count += 1
-
-        # 拟人化延迟
-        self._human_delay()
-
-        # 查找游戏窗口
-        win_rect = self._find_window()
-        if win_rect is None:
-            Logger.warning("[VisionExec] Game window not found")
-            # 无窗口时仍尝试点击 (可能窗口在上次查找后被最小化)
-            win_rect = (0, 0, 1920, 1080)
-
-        # ── 有 Vision Pipeline: 带验证执行 ──
-        if self._pipeline and self._pipeline.running:
-            # 捕获执行前状态
-            pre_state = self._pipeline.process_frame()
-
-            if pre_state is None:
-                return self._fallback_execute(action, win_rect)
-
-            # 带验证执行
-            ok = self._verifier.execute_with_verify(
-                action, pre_state, win_rect
-            )
-
-            if not ok:
-                self._fail_count += 1
-
-            return ok
-
-        # ── 无 Vision Pipeline: 回退执行 ──
-        return self._fallback_execute(action, win_rect)
-
-    # ── 回退执行 (坐标估算, 无验证) ──
-
-    def _fallback_execute(self, action: "GameAction",
-                           win_rect: Tuple[int, int, int, int]) -> bool:
-        """
-        回退执行 — 使用按钮模板匹配 + 坐标估算, 不验证。
-
-        复用现有 AirtestActionExecutor 的回退策略。
-        """
+    def execute(self, action):
         from ai.engine import ActionType
-
-        wx, wy, ww, wh = win_rect
-
-        try:
-            action_type = action.action
-            tile = action.tile
-
-            # 按钮动作
-            if action_type in (ActionType.PON, ActionType.CHI, ActionType.KAN,
-                                ActionType.RON, ActionType.TSUMO, ActionType.PASS):
-                btn_name = action_type.value
-                pos = self._find_button_fallback(btn_name, win_rect)
-                if pos is None:
-                    Logger.warning(f"[VisionExec] Fallback: button '{btn_name}' not found")
-                    self._fail_count += 1
-                    return False
-                self._click_at(*pos)
-                return True
-
-            # 切牌
-            if action_type == ActionType.DISCARD:
-                pos = self._find_tile_fallback(tile, win_rect)
-                if pos is None:
-                    self._fail_count += 1
-                    return False
-                self._click_at(*pos)
-                return True
-
-            # 立直: 先切牌再点按钮
-            if action_type == ActionType.RIICHI:
-                tile_pos = self._find_tile_fallback(tile, win_rect)
-                if not tile_pos:
-                    Logger.warning("[VisionExec] Fallback: riichi tile not found")
-                    self._fail_count += 1
-                    return False
-                self._click_at(*tile_pos)
-                time.sleep(random.uniform(0.3, 0.6))
-
-                # 尝试点击立直按钮 (即使失败, 牌已切出)
-                riichi_pos = self._find_button_fallback("riichi", win_rect)
-                if riichi_pos:
-                    self._click_at(*riichi_pos)
-                return True
-
+        if action.action == ActionType.NONE:
+            return True
+        if not self._is_active():
             return False
-
-        except Exception as e:
-            Logger.error(f"[VisionExec] Fallback error: {e}")
+        self._action_count += 1
+        self._human_delay()
+        if not self._is_active():
+            return False
+        win_rect = self._find_window()
+        if win_rect is None or self._pipeline is None or not self._pipeline.running:
             self._fail_count += 1
+            self._enabled = False
             return False
+        self._executing_rect = win_rect
+        try:
+            self._pipeline.set_window_rect(*win_rect)
+            pre_state = self._pipeline.process_frame()
+            ok = pre_state is not None and self._verifier.execute_with_verify(action, pre_state, win_rect)
+        except Exception as exc:
+            Logger.error(f'[VisionExec] Unconfirmed action: {exc}')
+            ok = False
+        finally:
+            self._executing_rect = None
+        if not ok:
+            self._fail_count += 1
+            self._enabled = False
+        return bool(ok)
 
-    def _find_button_fallback(self, btn_name: str,
-                                win_rect) -> Optional[Tuple[int, int]]:
-        """按钮定位回退"""
-        # 如果有 button detector, 尝试用它
-        if self._buttons and self._pipeline:
-            frame = self._pipeline.last_frame
-            if frame is None:
-                frame = self._pipeline.process_frame()
-            if frame is not None:
-                import numpy as np
-                # 拿最新截帧
-                pos = self._buttons.find_button_position(btn_name, frame if isinstance(frame, np.ndarray) else None)
-
-        # 坐标估算
-        from vision.buttons import ButtonDetector
-        fallback = ButtonDetector.FALLBACK_POSITIONS
-        if btn_name not in fallback:
-            return None
-
-        wx, wy, ww, wh = win_rect
-        rx, ry = fallback[btn_name]
-        return (
-            wx + int(ww * rx) + random.randint(-8, 8),
-            wy + int(wh * ry) + random.randint(-5, 5),
-        )
-
-    def _find_tile_fallback(self, tile: int,
-                              win_rect) -> Optional[Tuple[int, int]]:
-        """手牌定位回退"""
-        wx, wy, ww, wh = win_rect
-        idx = max(0, min(tile, 13))
-        step = int(ww * 0.94) // 14
-
-        x = wx + int(ww * 0.03) + step * idx + random.randint(step // 4, 3 * step // 4)
-        y = wy + int(wh * 0.93) + random.randint(-8, 8)
-        return (x, y)
-
-    # ── 鼠标操作 ──
+    # Mouse operations always recheck cancellation and window geometry.
 
     def _click_at(self, x: int, y: int) -> bool:
         """拟人化鼠标移动 + 点击"""
+        if not self._is_active():
+            return False
+        if self._executing_rect is None or self._find_window() != self._executing_rect:
+            return False
         try:
             import pyautogui
         except ImportError:
             Logger.debug(f"[VisionExec] WOULD click ({x}, {y})")
-            return True
+            return False
 
         try:
             cur_x, cur_y = pyautogui.position()
@@ -248,6 +141,8 @@ class VisionActionExecutor:
             pyautogui.moveTo(x, y, duration=random.uniform(0.02, 0.08))
 
             time.sleep(random.uniform(0.01, 0.05))
+            if not self._is_active() or self._find_window() != self._executing_rect:
+                return False
             pyautogui.click()
             return True
         except Exception:
@@ -259,7 +154,7 @@ class VisionActionExecutor:
         """查找游戏窗口 (带缓存)"""
         if self._window is not None:
             try:
-                if self._window.visible:
+                if self._window.visible and not self._window.isMinimized:
                     return (self._window.left, self._window.top,
                             self._window.width, self._window.height)
             except Exception:
@@ -293,7 +188,7 @@ class VisionActionExecutor:
                 if any(kw in title for kw in skip_kw):
                     continue
 
-                if w.visible and w.width > 600 and w.height > 400:
+                if w.visible and not w.isMinimized and w.width > 600 and w.height > 400:
                     candidates.append((w.width * w.height, w))
 
             if candidates:

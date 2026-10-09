@@ -130,7 +130,7 @@ class TestStateDiffer(unittest.TestCase):
         frame = self._make_frame(hand_count=13)
         events = differ.diff(frame)
         # 首帧只产生 game_start (如果有足够手牌)
-        self.assertTrue(len(events) <= 1)
+        self.assertEqual([e.event_type for e in events], ['game_start', 'new_round'])
 
     def test_detect_draw(self):
         """检测摸牌: 手牌 13→14"""

@@ -234,8 +234,8 @@ class TestBlankTileExclusion(unittest.TestCase):
             self.skipTest("Template 31 (白板) not found")
 
         tile_id, conf = matcher.match_single(tmpl_31)
-        self.assertEqual(tile_id, -1,
-                         f"Blank tile (31) should be excluded, got {tile_id}")
+        self.assertEqual(tile_id, 31,
+                         f"Complete white-dragon face should be recognized, got {tile_id}")
 
 
 class TestTemplateLoading(unittest.TestCase):

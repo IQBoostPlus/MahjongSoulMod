@@ -67,21 +67,31 @@ class GameState:
 
     # ── 最后动作 ──
     last_action: str = ""
+    last_action_seat: int = -1
+    last_draw_tile: int = -1
     last_discard: int = -1       # 上家打出的最后一张牌
     last_discard_seat: int = -1  # 最后一张牌的出牌者座位
 
     # ── 对局生命周期 ──
     in_game: bool = False
+    # None means no confirmed operation list; an empty set means no buttons.
+    available_actions: Optional[Set[str]] = None
 
     def get_seen_count(self, tile_id: int) -> int:
         """获取某张牌已见张数"""
         if 0 <= tile_id < len(self.seen_tiles):
-            return self.seen_tiles[tile_id]
+            from ai.shanten import normalize_tile, RED_TO_NORMAL
+            tile_id = normalize_tile(tile_id)
+            count = self.seen_tiles[tile_id]
+            for red, normal in RED_TO_NORMAL.items():
+                if normal == tile_id:
+                    count += self.seen_tiles[red]
+            return count
         return 0
 
     def get_remaining(self, tile_id: int) -> int:
         """获取某张牌剩余张数 (最多4张)"""
-        return 4 - self.get_seen_count(tile_id)
+        return max(0, 4 - self.get_seen_count(tile_id))
 
     def __str__(self) -> str:
         hand = ", ".join(tile_to_str(t) for t in self.players[self.self_seat].hand)
@@ -140,6 +150,8 @@ class GameTracker:
         self.state.dora_indicator = data.get("dora_indicator", -1)
         self.state.left_tiles = data.get("tile_count", 0)
         self.state.last_action = "new_round"
+        self.state.last_action_seat = self.state.self_seat
+        self.state.last_draw_tile = -1
         self.state.last_discard = -1
 
         # 点数
@@ -183,6 +195,8 @@ class GameTracker:
                 Logger.info(f"Draw: {tile_to_str(tile)} → {', '.join(tile_to_str(t) for t in self.state.players[seat].hand)}")
             # 关键: 设置 last_action，触发 context.py 中的 AI 出牌决策
             self.state.last_action = "draw"
+            self.state.last_action_seat = seat
+            self.state.last_draw_tile = tile
 
         self.state.last_discard = -1
         self.state.left_tiles = data.get("left_count", self.state.left_tiles - 1)
@@ -197,7 +211,7 @@ class GameTracker:
         if tile >= 0:
             self.state.players[seat].discards.append(tile)
             self.state.players[seat].discards_count += 1
-            if 0 <= tile < 37:
+            if seat != self.state.self_seat and 0 <= tile < 37:
                 self.state.seen_tiles[tile] += 1
 
         # 从手牌移除 (仅自家)
@@ -211,6 +225,7 @@ class GameTracker:
         self.state.last_discard = tile
         self.state.last_discard_seat = seat
         self.state.last_action = "discard"
+        self.state.last_action_seat = seat
 
         Logger.info(f"Discard[{seat}]: {tile_to_str(tile)} " +
                     f"{'(liqi)' if is_liqi else ''}{'(moqie)' if moqie else ''}")
@@ -220,6 +235,7 @@ class GameTracker:
         seat = data.get("seat", 0)
         tile = data.get("tile", -1)
         tiles = data.get("tiles", [])
+        self.state.last_action_seat = seat
 
         meld = Meld(MeldType.CHI, tiles, data.get("from", -1))
         self.state.players[seat].melds.append(meld)
@@ -227,9 +243,12 @@ class GameTracker:
 
         # 从手牌移除
         if seat == self.state.self_seat:
-            for t in tiles:
-                if t in self.state.players[seat].hand:
-                    self.state.players[seat].hand.remove(t)
+            own_tiles = list(tiles)
+            if tile in own_tiles:
+                own_tiles.remove(tile)
+            for t in own_tiles:
+                self._remove_hand_tile(seat, t)
+            self.state.last_action = 'call'
 
         Logger.info(f"Chi[{seat}]: {tile_to_str(tile)}")
 
@@ -237,6 +256,7 @@ class GameTracker:
         """碰"""
         seat = data.get("seat", 0)
         tile = data.get("tile", -1)
+        self.state.last_action_seat = seat
 
         # 碰牌由3张相同牌组成
         meld = Meld(MeldType.PON, [tile, tile, tile], data.get("from", -1))
@@ -246,8 +266,8 @@ class GameTracker:
         # 从手牌移除2张
         if seat == self.state.self_seat:
             for _ in range(2):
-                if tile in self.state.players[seat].hand:
-                    self.state.players[seat].hand.remove(tile)
+                self._remove_hand_tile(seat, tile)
+            self.state.last_action = 'call'
 
         Logger.info(f"Pon[{seat}]: {tile_to_str(tile)}")
 
@@ -267,15 +287,35 @@ class GameTracker:
         seat = data.get("seat", 0)
         tile = data.get("tile", -1)
         meld = Meld(meld_type, [tile] * 4, data.get("from", -1))
-        self.state.players[seat].melds.append(meld)
-        self.state.players[seat].is_menzen = False
+        player = self.state.players[seat]
+        if meld_type == MeldType.KAN_JIA:
+            from ai.shanten import normalize_tile
+            old = next((m for m in player.melds if m.type == MeldType.PON
+                        and normalize_tile(m.tiles[0]) == normalize_tile(tile)), None)
+            if old is None:
+                raise ValueError('Added kan without an existing pon')
+            old.type = MeldType.KAN_JIA
+            old.tiles.append(tile)
+        else:
+            player.melds.append(meld)
+        if meld_type != MeldType.KAN_AN:
+            player.is_menzen = False
 
         if seat == self.state.self_seat:
-            for _ in range(4 if meld_type != MeldType.KAN_JIA else 1):
-                if tile in self.state.players[seat].hand:
-                    self.state.players[seat].hand.remove(tile)
+            count = {MeldType.KAN_MING: 3, MeldType.KAN_AN: 4, MeldType.KAN_JIA: 1}[meld_type]
+            for _ in range(count):
+                self._remove_hand_tile(seat, tile)
 
         Logger.info(f"{label}[{seat}]: {tile_to_str(tile)}")
+
+    def _remove_hand_tile(self, seat, tile):
+        from ai.shanten import normalize_tile
+        hand = self.state.players[seat].hand
+        actual = next((t for t in hand if t == tile), None)
+        if actual is None:
+            actual = next((t for t in hand if normalize_tile(t) == normalize_tile(tile)), None)
+        if actual is not None:
+            hand.remove(actual)
 
     def _on_liqi(self, data: dict):
         """立直宣告"""
