@@ -5,7 +5,7 @@
       "id": "shot-32f2fe38548e",
       "session_id": "legacy-unknown-session-group",
       "split": "development",
-      "status": "pending",
+      "status": "reviewed",
       "source": {
         "kind": "local_capture",
         "provenance": "Legacy local annotated screenshot, already used to tune v2.5; has ROI overlays.",
@@ -18,7 +18,7 @@
         2557,
         1597
       ],
-      "theme": "unknown",
+      "theme": "default",
       "frame_index": 0,
       "imported_at": "2026-10-08T08:18:46.903771+00:00",
       "hand": {
@@ -28,7 +28,22 @@
           0.825,
           0.954
         ],
-        "tiles": null
+        "tiles": [
+          2,
+          5,
+          7,
+          9,
+          10,
+          10,
+          17,
+          17,
+          19,
+          21,
+          23,
+          27,
+          31,
+          6
+        ]
       },
       "buttons": {
         "roi": [
@@ -39,13 +54,13 @@
         ],
         "visible": null
       },
-      "reviewer": null
+      "reviewer": "assistant visual review, 2026-10-09; tile-by-tile visual ID against default tile templates; pending user spot-check"
     },
     {
       "id": "shot-e58f1ed1d014",
       "session_id": "legacy-unknown-session-group",
       "split": "development",
-      "status": "pending",
+      "status": "reviewed",
       "source": {
         "kind": "external_unknown",
         "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
@@ -58,17 +73,26 @@
         1024,
         597
       ],
-      "theme": "unknown",
+      "theme": "default",
       "frame_index": 1,
       "imported_at": "2026-10-08T08:18:46.921706+00:00",
       "hand": {
         "roi": [
           0.116,
-          0.817,
-          0.825,
-          0.954
+          0.848,
+          0.516,
+          0.998
         ],
-        "tiles": null
+        "tiles": [
+          0,
+          0,
+          0,
+          3,
+          34,
+          4,
+          12,
+          12
+        ]
       },
       "buttons": {
         "roi": [
@@ -79,13 +103,13 @@
         ],
         "visible": null
       },
-      "reviewer": null
+      "reviewer": "assistant visual review, 2026-10-09; tile-by-tile visual ID against default tile templates; pending user spot-check"
     },
     {
       "id": "shot-294a9852f306",
       "session_id": "legacy-unknown-session-group",
       "split": "development",
-      "status": "pending",
+      "status": "reviewed",
       "source": {
         "kind": "external_unknown",
         "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
@@ -98,17 +122,31 @@
         1280,
         1024
       ],
-      "theme": "unknown",
+      "theme": "default",
       "frame_index": 2,
       "imported_at": "2026-10-08T08:18:46.940856+00:00",
       "hand": {
         "roi": [
-          0.116,
-          0.817,
-          0.825,
-          0.954
+          0.115,
+          0.757,
+          0.759,
+          0.859
         ],
-        "tiles": null
+        "tiles": [
+          0,
+          1,
+          4,
+          6,
+          9,
+          12,
+          13,
+          16,
+          17,
+          18,
+          20,
+          27,
+          29
+        ]
       },
       "buttons": {
         "roi": [
@@ -119,13 +157,13 @@
         ],
         "visible": null
       },
-      "reviewer": null
+      "reviewer": "assistant visual review, 2026-10-09; tile-by-tile visual ID against default tile templates; pending user spot-check"
     },
     {
       "id": "shot-228e6a45999d",
       "session_id": "legacy-unknown-session-group",
       "split": "development",
-      "status": "pending",
+      "status": "reviewed",
       "source": {
         "kind": "external_unknown",
         "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
@@ -138,7 +176,7 @@
         1360,
         850
       ],
-      "theme": "unknown",
+      "theme": "default",
       "frame_index": 3,
       "imported_at": "2026-10-08T08:18:46.961439+00:00",
       "hand": {
@@ -148,7 +186,19 @@
           0.825,
           0.954
         ],
-        "tiles": null
+        "tiles": [
+          11,
+          12,
+          12,
+          13,
+          14,
+          15,
+          16,
+          36,
+          24,
+          24,
+          27
+        ]
       },
       "buttons": {
         "roi": [
@@ -159,7 +209,7 @@
         ],
         "visible": null
       },
-      "reviewer": null
+      "reviewer": "assistant visual review, 2026-10-09; tile-by-tile visual ID against default tile templates; pending user spot-check"
     },
     {
       "id": "shot-a228506f51f0",
@@ -219,7 +269,7 @@
       "id": "shot-36fffa7c389f",
       "session_id": "legacy-unknown-session-group",
       "split": "development",
-      "status": "pending",
+      "status": "reviewed",
       "source": {
         "kind": "external_unknown",
         "provenance": "Legacy web_shots image; original URL/session not recorded; previously probed in development.",
@@ -232,17 +282,32 @@
         3345,
         1882
       ],
-      "theme": "unknown",
+      "theme": "default",
       "frame_index": 5,
       "imported_at": "2026-10-08T08:18:47.014295+00:00",
       "hand": {
         "roi": [
-          0.116,
-          0.817,
-          0.825,
-          0.954
+          0.115,
+          0.855,
+          0.824,
+          0.995
         ],
-        "tiles": null
+        "tiles": [
+          9,
+          10,
+          11,
+          35,
+          14,
+          15,
+          19,
+          20,
+          21,
+          24,
+          26,
+          29,
+          29,
+          25
+        ]
       },
       "buttons": {
         "roi": [
@@ -253,7 +318,7 @@
         ],
         "visible": null
       },
-      "reviewer": null
+      "reviewer": "assistant visual review, 2026-10-09; tile-by-tile visual ID against default tile templates; pending user spot-check"
     }
   ]
 }
